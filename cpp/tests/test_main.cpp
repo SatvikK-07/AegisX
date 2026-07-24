@@ -67,7 +67,7 @@ TEST_CASE("ITCH parser validates known definitions, policy, fields, and streamin
   CHECK(known_skipped.statistics.skipped_messages == 1);
   CHECK(known_skipped.statistics.skipped_by_type.at('Y') == 1);
   CHECK_FALSE(strict.parse(framed('Y', 19)));
-  for (const auto [type, length] :
+  for (const auto& [type, length] :
        {std::pair{'J', 35U}, std::pair{'h', 21U}, std::pair{'I', 50U}, std::pair{'N', 20U}}) {
     const auto administrative = strict.parse(framed(type, length));
     REQUIRE(administrative);
