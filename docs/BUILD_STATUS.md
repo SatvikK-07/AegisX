@@ -38,7 +38,7 @@ reproduction command are version controlled.
 - C++ formatting check: **PASS**.
 - Dashboard, research package, and root scripts bytecode smoke test: **PASS**.
 - Local `clang-tidy` was unavailable; the version-controlled Linux CI job
-  installs and runs it. The current hosted result will be recorded after push.
+  installed and ran it successfully.
 
 ### Measured real-data performance
 
@@ -74,7 +74,16 @@ in `docs/PERFORMANCE.md`, `docs/experiment_results.md`, and
 
 ### Hosted CI
 
-- The previous repository revision passed the complete seven-job Linux matrix.
-- Current-revision GCC/Clang, sanitizer, formatting, clang-tidy, Python, and
-  real-data workflow results are pending publication and will replace this
-  provisional note.
+- GitHub Actions
+  [`30119382594`](https://github.com/SatvikK-07/AegisX/actions/runs/30119382594)
+  for commit `ce24c9f` completed **SUCCESS**:
+  - GCC Debug and Release: **PASS**
+  - Clang Debug and Release: **PASS**
+  - Linux GCC AddressSanitizer/UndefinedBehaviorSanitizer: **PASS**
+  - clang-format and production-target clang-tidy: **PASS**
+  - Python research tests and dashboard/root-script smoke: **PASS**
+- The independently dispatched official-data workflow
+  [`30119549331`](https://github.com/SatvikK-07/AegisX/actions/runs/30119549331)
+  completed **SUCCESS**. A clean GitHub runner downloaded and checksum-validated
+  both Nasdaq sessions, built the Release engine, executed the two-session real
+  pipeline, and uploaded its provenance and derived evidence.
