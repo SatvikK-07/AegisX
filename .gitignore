@@ -1,0 +1,14 @@
+._*
+.DS_Store
+build*/
+runs/*
+!runs/.gitkeep
+__pycache__/
+.pytest_cache/
+*.pyc
+*.profraw
+*.profdata
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
