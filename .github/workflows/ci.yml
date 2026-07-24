@@ -25,7 +25,7 @@ jobs:
             cxx: clang++
             build_type: Release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure offline tree
         run: cmake -S . -B build/${{ matrix.compiler }}-${{ matrix.build_type }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
       - name: Build with warnings as errors
@@ -37,7 +37,7 @@ jobs:
     name: gcc ASan UBSan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -S . -B build/sanitizers -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Debug -DAEGISX_ENABLE_SANITIZERS=ON
       - name: Build
@@ -51,7 +51,7 @@ jobs:
   static-and-format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Enforce C++ formatting
         run: find cpp -type f \( -name '*.cpp' -o -name '*.h' \) -print0 | xargs -0 clang-format --dry-run --Werror
       - name: Configure clang-tidy build
@@ -62,8 +62,8 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Install research and dashboard dependencies
