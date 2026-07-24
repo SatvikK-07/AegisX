@@ -36,11 +36,16 @@ as observed; no production or exchange-performance claim is implied.
 
 ### Hosted CI
 
-- The previously inspected GitHub Actions run failed because `clang-tidy`
-  analyzed vendored Catch2 macro expansions. Static analysis is now scoped to
-  production targets.
-- A new hosted run is required after the final push. This section will be
-  updated only after that run reaches a terminal state.
+- GitHub Actions run
+  [`30109210015`](https://github.com/SatvikK-07/AegisX/actions/runs/30109210015)
+  for commit `9e00593` completed **SUCCESS**.
+- GCC Debug/Release: **PASS**
+- Clang Debug/Release: **PASS**
+- Linux GCC ASan/UBSan with leak detection: **PASS**
+- clang-format and production-target clang-tidy: **PASS**
+- Python research/portfolio tests and dashboard smoke: **PASS**
+- Workflow actions use their Node 24 releases (`checkout@v5`,
+  `setup-python@v6`).
 
 ### Current benchmark evidence
 
