@@ -14,7 +14,16 @@ os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
 
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, brier_score_loss, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    brier_score_loss,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -40,11 +49,17 @@ def chronological_split(
     test_start = validation_end + embargo_rows
     if train_end == 0 or validation_start >= validation_end or test_start >= len(ordered):
         raise ValueError("not enough chronological observations after embargo")
-    return ChronologicalSplit(
-        train=ordered.iloc[:train_end].copy(),
-        validation=ordered.iloc[validation_start:validation_end].copy(),
-        test=ordered.iloc[test_start:].copy(),
-    )
+    train = ordered.iloc[:train_end].copy()
+    validation = ordered.iloc[validation_start:validation_end].copy()
+    test = ordered.iloc[test_start:].copy()
+    if "label_end_timestamp_ns" in ordered:
+        validation_start_time = validation["timestamp_ns"].iloc[0]
+        test_start_time = test["timestamp_ns"].iloc[0]
+        train = train.loc[train["label_end_timestamp_ns"] < validation_start_time].copy()
+        validation = validation.loc[validation["label_end_timestamp_ns"] < test_start_time].copy()
+        if train.empty or validation.empty:
+            raise ValueError("forward label windows exhaust a chronological partition")
+    return ChronologicalSplit(train=train, validation=validation, test=test)
 
 
 def assert_no_leakage(frame: pd.DataFrame, feature_columns: list[str] | tuple[str, ...], label_columns: list[str]) -> None:
@@ -64,17 +79,31 @@ def assert_no_leakage(frame: pd.DataFrame, feature_columns: list[str] | tuple[st
 def _metric_row(name: str, actual: pd.Series, probability: np.ndarray) -> dict[str, float | str]:
     prediction = (probability >= 0.5).astype(int)
     auc = float("nan") if actual.nunique() < 2 else float(roc_auc_score(actual, probability))
+    pr_auc = float("nan") if actual.nunique() < 2 else float(average_precision_score(actual, probability))
+    tn, fp, fn, tp = confusion_matrix(actual, prediction, labels=[0, 1]).ravel()
+    calibration_error = float(abs(actual.mean() - probability.mean()))
     return {
         "model": name,
         "roc_auc": auc,
+        "pr_auc": pr_auc,
         "brier": float(brier_score_loss(actual, probability)),
+        "calibration_error": calibration_error,
         "accuracy": float(accuracy_score(actual, prediction)),
         "precision": float(precision_score(actual, prediction, zero_division=0)),
         "recall": float(recall_score(actual, prediction, zero_division=0)),
+        "f1": float(f1_score(actual, prediction, zero_division=0)),
+        "true_negative": int(tn),
+        "false_positive": int(fp),
+        "false_negative": int(fn),
+        "true_positive": int(tp),
     }
 
 
-def run_fill_experiments(split: ChronologicalSplit, feature_columns: list[str] | tuple[str, ...]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def run_fill_experiments(
+    split: ChronologicalSplit,
+    feature_columns: list[str] | tuple[str, ...],
+    random_seed: int = 7,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Compare a baseline, a transparent rule, logistic model and boosted model."""
     label = "passive_fill_label"
     assert_no_leakage(split.train, feature_columns, [label, "adverse_selection_ticks"])
@@ -84,10 +113,23 @@ def run_fill_experiments(split: ChronologicalSplit, feature_columns: list[str] |
     test_x = split.test.loc[:, feature_columns].fillna(0.0)
     actual = split.test[label].astype(int)
     baseline = np.full(len(split.test), split.train[label].mean(), dtype=float)
+    bucket_edges = np.quantile(split.train["timestamp_ns"], [0.0, 0.25, 0.5, 0.75, 1.0])
+    bucket_edges = np.unique(bucket_edges)
+    if len(bucket_edges) < 2:
+        bucket_baseline = baseline.copy()
+    else:
+        train_bucket = pd.cut(split.train["timestamp_ns"], bucket_edges, labels=False, include_lowest=True)
+        bucket_rates = split.train.groupby(train_bucket, observed=True)[label].mean()
+        test_bucket = pd.cut(split.test["timestamp_ns"], bucket_edges, labels=False, include_lowest=True)
+        bucket_baseline = test_bucket.map(bucket_rates).fillna(split.train[label].mean()).to_numpy(dtype=float)
     rule = (split.test["top_imbalance"].fillna(0.0).to_numpy() > 0.0).astype(float)
-    logistic = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1_000, random_state=7))
-    boosted = HistGradientBoostingClassifier(max_depth=3, learning_rate=0.08, random_state=7)
-    models = {"fill-rate baseline": baseline, "imbalance rule": rule}
+    logistic = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1_000, random_state=random_seed))
+    boosted = HistGradientBoostingClassifier(max_depth=3, learning_rate=0.08, random_state=random_seed)
+    models = {
+        "unconditional fill-rate baseline": baseline,
+        "historical time-bucket baseline": bucket_baseline,
+        "imbalance rule": rule,
+    }
     for name, model in {"logistic regression": logistic, "boosted trees": boosted}.items():
         model.fit(train_x, split.train[label].astype(int))
         models[name] = model.predict_proba(test_x)[:, 1]

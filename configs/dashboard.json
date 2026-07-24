@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "kind": "dashboard",
+  "default_run": "runs/demo",
+  "read_only": true
+}

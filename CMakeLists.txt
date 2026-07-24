@@ -42,7 +42,9 @@ target_compile_definitions(aegisx_tests PRIVATE AEGISX_SOURCE_DIR="${CMAKE_SOURC
 
 if(AEGISX_ENABLE_CLANG_TIDY)
   find_program(AEGISX_CLANG_TIDY_EXECUTABLE NAMES clang-tidy REQUIRED)
-  foreach(target aegisx aegisx_cli aegisx_tests)
+  # Analyze production code only. Catch2 is vendored and its assertion macros
+  # intentionally perform enum casts that trigger opt-in analyzer diagnostics.
+  foreach(target aegisx aegisx_cli)
     set_property(TARGET ${target} PROPERTY CXX_CLANG_TIDY
       "${AEGISX_CLANG_TIDY_EXECUTABLE};--warnings-as-errors=*")
   endforeach()
@@ -51,3 +53,5 @@ endif()
 enable_testing()
 add_test(NAME aegisx_cpp_tests COMMAND aegisx_tests)
 add_test(NAME aegisx_fixture_smoke COMMAND aegisx_cli replay --input ${CMAKE_SOURCE_DIR}/data/fixtures/aegisx_itch_sample.itch --output ${CMAKE_BINARY_DIR}/fixture_smoke)
+add_test(NAME aegisx_execution_micro_scenarios COMMAND aegisx_tests "[execution]")
+add_test(NAME aegisx_risk_reservation_scenarios COMMAND aegisx_tests "[risk]")

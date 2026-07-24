@@ -40,20 +40,31 @@ The bundled fixtures are intentionally too short to support a credible fitted mo
 python scripts/generate_benchmark_fixture.py --pairs 500000 --output /private/tmp/aegisx-million.itch
 ./build/release/aegisx benchmark --input /private/tmp/aegisx-million.itch --output /private/tmp/throughput
 ./build/release/aegisx execution-benchmark --output /private/tmp/execution
-./build/release/aegisx risk-benchmark --iterations 100000 --output /private/tmp/risk
+./build/release/aegisx risk-benchmark --iterations 1000000 --output /private/tmp/risk
 ```
 
-On an Apple M3 with GCC 15.2 Release, the three-run median replay result was **6.69M synthetic events/sec**; the pre-trade approval benchmark recorded **26 μs p99** and **74.9K checks/sec** over 100,000 checks. Adaptive execution saved **139.0 bps** versus TWAP across three deterministic synthetic book scenarios. These are local synthetic benchmarks, not external-feed, live-trading, or production-latency claims.
+On an Apple M3 with AppleClang 17 Release, the three-run medians were **10.280M
+synthetic parser events/sec** and **6.989M synthetic replay events/sec**. The
+pre-trade benchmark recorded **0.125 μs p99 approval latency** and **7.760M
+approval/release checks/sec** over 1,000,000 checks. Adaptive execution saved
+**89.3276 bps on average versus TWAP across six deterministic synthetic
+regimes** (113.316 bps standard deviation). These are local synthetic
+benchmarks, not external-feed, live-trading, profitability, or
+production-latency claims. See [performance methodology](docs/PERFORMANCE.md).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Replay model](docs/replay_model.md)
 - [ITCH validation](docs/itch_validation.md)
 - [Order-book validation](docs/order_book_validation.md)
 - [Execution model](docs/execution_model.md)
 - [Risk model](docs/risk_model.md)
 - [Research methodology](docs/research_methodology.md)
 - [Benchmark report](docs/benchmark_report.md)
+- [Experiment results](docs/experiment_results.md)
+- [Final requirement audit](docs/requirements_audit.md)
+- [Portfolio and interview content](docs/portfolio_content.md)
 - [Assumptions](docs/assumptions.md), [limitations](docs/limitations.md), and [demo script](docs/demo_script.md)
 
 The small committed fixtures are synthetic and specification-derived. They are not exchange data and must not be treated as evidence of production latency, fill quality, capacity, or model performance.

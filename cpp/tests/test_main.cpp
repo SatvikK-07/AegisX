@@ -236,7 +236,7 @@ TEST_CASE("streaming replay is deterministic and keeps instruments isolated") {
   CHECK(first.full_state_checksum == second.full_state_checksum);
 }
 
-TEST_CASE("execution strategies use isolated liquidity, shadow consumption, and arrival benchmarks") {
+TEST_CASE("execution strategies use isolated liquidity, shadow consumption, and arrival benchmarks", "[execution]") {
   const auto market = execution_market();
   const aegisx::ParentOrder parent{1, 1, "AAPL", Side::Buy, 8, 2, 7};
   aegisx::ExecutionConfig config;
@@ -259,7 +259,7 @@ TEST_CASE("execution strategies use isolated liquidity, shadow consumption, and 
   CHECK(twap.children.front().submitted_quantity != vwap.children.front().submitted_quantity);
 }
 
-TEST_CASE("adaptive execution can choose passive children in a wide displayed market") {
+TEST_CASE("adaptive execution can choose passive children in a wide displayed market", "[execution]") {
   const std::vector<Event> market{
       event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
       event(1, Add{1, Side::Buy, 10, 99, "AAPL", {}}),
@@ -272,8 +272,8 @@ TEST_CASE("adaptive execution can choose passive children in a wide displayed ma
   };
   const aegisx::ParentOrder parent{1, 1, "AAPL", Side::Buy, 10, 2, 8};
   aegisx::ExecutionConfig config;
-  config.intervals = 2;
-  config.max_child_quantity = 5;
+  config.intervals = 1;
+  config.max_child_quantity = 10;
   config.force_completion_at_end = false;
   const auto adaptive = aegisx::ExecutionSimulator{}.run(market, parent, aegisx::Strategy::Adaptive, config);
   CHECK(adaptive.filled == parent.target_quantity);
@@ -281,7 +281,197 @@ TEST_CASE("adaptive execution can choose passive children in a wide displayed ma
   CHECK(adaptive.average_price == 99.0);
 }
 
-TEST_CASE("risk reservations, marked PnL, rate limits, and kill switch are enforced") {
+TEST_CASE("passive queue flow is conserved across multiple simulated children", "[execution]") {
+  const std::vector<Event> market{
+      event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      event(1, Add{1, Side::Buy, 20, 99, "AAPL", {}}),
+      event(1, Add{2, Side::Sell, 20, 101, "AAPL", {}}),
+      event(2, aegisx::System{'O'}),
+      event(5, aegisx::System{'Q'}),
+      event(6, aegisx::Execute{1, 20, 1}),
+  };
+  const aegisx::ParentOrder parent{7, 1, "AAPL", Side::Buy, 10, 2, 7};
+  aegisx::ExecutionConfig config;
+  config.intervals = 2;
+  config.max_child_quantity = 5;
+  config.force_completion_at_end = false;
+  const auto report = aegisx::ExecutionSimulator{}.run(market, parent, aegisx::Strategy::Adaptive, config);
+  REQUIRE(report.children.size() == 2);
+  CHECK(report.children[0].initial_queue_ahead == 20);
+  CHECK(report.children[0].queue_ahead == 0);
+  CHECK(report.children[1].initial_queue_ahead == 25);
+  CHECK(report.children[1].queue_ahead == 25);
+  CHECK(report.filled == 0);
+  CHECK(report.parent_state.filled + report.parent_state.open + report.parent_state.remaining_unsubmitted +
+            report.parent_state.terminal_unfilled ==
+        parent.target_quantity);
+  CHECK(report.parent_state.terminal_unfilled == parent.target_quantity);
+}
+
+TEST_CASE("passive queue depletes ahead quantity before a partial maker fill", "[execution]") {
+  const auto scenario = [](const bool include_second_execution) {
+    std::vector<Event> events{
+        event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+        event(1, Add{1, Side::Buy, 110, 99, "AAPL", {}}),
+        event(1, Add{2, Side::Sell, 200, 101, "AAPL", {}}),
+        event(2, aegisx::Cancel{1, 10}),
+        event(3, aegisx::Execute{1, 80, 1}),
+    };
+    if (include_second_execution) {
+      events.push_back(event(4, Add{3, Side::Buy, 30, 99, "AAPL", {}}));
+      events.push_back(event(5, aegisx::Execute{3, 30, 2}));
+    }
+    return events;
+  };
+  aegisx::ExecutionConfig config;
+  config.intervals = 1;
+  config.max_child_quantity = 50;
+  config.force_completion_at_end = false;
+  const auto first = aegisx::ExecutionSimulator{}.run(scenario(false), {20, 1, "AAPL", Side::Buy, 50, 2, 3},
+                                                      aegisx::Strategy::Adaptive, config);
+  REQUIRE(first.children.size() == 1);
+  CHECK(first.children.front().initial_queue_ahead == 100);
+  CHECK(first.children.front().queue_ahead == 20);
+  CHECK(first.filled == 0);
+  const auto second = aegisx::ExecutionSimulator{}.run(scenario(true), {21, 1, "AAPL", Side::Buy, 50, 2, 5},
+                                                       aegisx::Strategy::Adaptive, config);
+  REQUIRE(second.children.size() == 1);
+  CHECK(second.children.front().queue_ahead == 0);
+  CHECK(second.filled == 10);
+  CHECK(second.children.front().remaining_quantity == 40);
+}
+
+TEST_CASE("passive cancellation allocation supports zero half and full fractions", "[execution]") {
+  const std::vector<Event> market{
+      event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      event(1, Add{1, Side::Buy, 100, 99, "AAPL", {}}),
+      event(1, Add{2, Side::Sell, 100, 101, "AAPL", {}}),
+      event(2, aegisx::System{'O'}),
+      event(3, aegisx::Cancel{1, 40}),
+  };
+  const auto queue_after = [&](const double fraction) {
+    aegisx::ExecutionConfig config;
+    config.intervals = 1;
+    config.max_child_quantity = 50;
+    config.force_completion_at_end = false;
+    config.cancellation_queue_fraction = fraction;
+    const auto report = aegisx::ExecutionSimulator{}.run(market, {22, 1, "AAPL", Side::Buy, 50, 2, 3},
+                                                         aegisx::Strategy::Adaptive, config);
+    REQUIRE(report.children.size() == 1);
+    return report.children.front().queue_ahead;
+  };
+  CHECK(queue_after(0.0) == 100);
+  CHECK(queue_after(0.5) == 80);
+  CHECK(queue_after(1.0) == 60);
+  aegisx::ExecutionConfig invalid;
+  invalid.cancellation_queue_fraction = -0.1;
+  CHECK_THROWS(aegisx::ExecutionSimulator{}.run(market, {23, 1, "AAPL", Side::Buy, 50, 2, 3},
+                                                aegisx::Strategy::Adaptive, invalid));
+  invalid.cancellation_queue_fraction = 1.1;
+  CHECK_THROWS(aegisx::ExecutionSimulator{}.run(market, {24, 1, "AAPL", Side::Buy, 50, 2, 3},
+                                                aegisx::Strategy::Adaptive, invalid));
+}
+
+TEST_CASE("execution records exact arrival state and explicit latency stages", "[execution]") {
+  const auto market = execution_market();
+  const aegisx::ParentOrder parent{9, 1, "AAPL", Side::Buy, 4, 2, 7};
+  aegisx::ExecutionConfig config;
+  config.intervals = 1;
+  config.max_child_quantity = 4;
+  config.decision_latency_ns = 1;
+  config.transmission_latency_ns = 1;
+  config.exchange_ack_latency_ns = 2;
+  const auto report = aegisx::ExecutionSimulator{}.run(market, parent, aegisx::Strategy::Twap, config);
+  REQUIRE(report.arrival_benchmark);
+  CHECK(report.arrival_benchmark->bid == 99);
+  CHECK(report.arrival_benchmark->ask == 101);
+  CHECK(report.arrival_benchmark->mid == 100.0);
+  REQUIRE_FALSE(report.children.empty());
+  CHECK(report.children.front().submission_time == report.children.front().decision_time + 1);
+  CHECK(report.children.front().exchange_arrival_time == report.children.front().submission_time + 1);
+  CHECK(report.children.front().acknowledgment_time == report.children.front().exchange_arrival_time + 2);
+  CHECK(report.parent_state.invariant_error().empty());
+}
+
+TEST_CASE("maker rebates and taker fees remain separate from gross execution cost", "[execution]") {
+  const std::vector<Event> market{
+      event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      event(1, Add{1, Side::Buy, 10, 99, "AAPL", {}}),
+      event(1, Add{2, Side::Sell, 20, 101, "AAPL", {}}),
+      event(2, aegisx::System{'O'}),
+      event(3, aegisx::Execute{1, 10, 1}),
+      event(4, Add{3, Side::Buy, 10, 99, "AAPL", {}}),
+      event(5, aegisx::Execute{3, 10, 2}),
+  };
+  const aegisx::ParentOrder parent{25, 1, "AAPL", Side::Buy, 10, 2, 5};
+  aegisx::ExecutionConfig maker_config;
+  maker_config.intervals = 1;
+  maker_config.max_child_quantity = 10;
+  maker_config.force_completion_at_end = false;
+  maker_config.maker_fee_per_share = -1;
+  const auto maker = aegisx::ExecutionSimulator{}.run(market, parent, aegisx::Strategy::Adaptive, maker_config);
+  CHECK(maker.filled == 10);
+  CHECK(maker.fees == -10);
+  CHECK(maker.fees_paid == 0);
+  CHECK(maker.rebates == 10);
+  REQUIRE(maker.gross_execution_cost_ticks);
+  REQUIRE(maker.implementation_shortfall_currency);
+  CHECK(*maker.implementation_shortfall_currency == *maker.gross_execution_cost_ticks - 10.0);
+
+  aegisx::ExecutionConfig taker_config;
+  taker_config.intervals = 1;
+  taker_config.max_child_quantity = 10;
+  taker_config.taker_fee_per_share = 2;
+  const auto taker = aegisx::ExecutionSimulator{}.run(market, parent, aegisx::Strategy::Twap, taker_config);
+  CHECK(taker.filled == 10);
+  CHECK(taker.fees == 20);
+  CHECK(taker.fees_paid == 20);
+  CHECK(taker.rebates == 0);
+}
+
+TEST_CASE("aggressive child executes against activation-time liquidity after transmission latency", "[execution]") {
+  const std::vector<Event> market{
+      event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      event(1, Add{1, Side::Buy, 10, 99, "AAPL", {}}),
+      event(1, Add{2, Side::Sell, 10, 101, "AAPL", {}}),
+      event(2, aegisx::System{'O'}),
+      event(3, aegisx::Replace{2, 3, 10, 105}),
+      event(4, aegisx::System{'Q'}),
+  };
+  aegisx::ExecutionConfig config;
+  config.intervals = 1;
+  config.max_child_quantity = 5;
+  config.transmission_latency_ns = 2;
+  config.force_completion_at_end = false;
+  const auto report =
+      aegisx::ExecutionSimulator{}.run(market, {26, 1, "AAPL", Side::Buy, 5, 2, 4}, aegisx::Strategy::Twap, config);
+  REQUIRE(report.average_price);
+  CHECK(*report.average_price == 105.0);
+  REQUIRE_FALSE(report.fills.empty());
+  CHECK(report.fills.front().timestamp == 4);
+  CHECK(report.fills.front().timestamp >= report.children.front().exchange_arrival_time);
+}
+
+TEST_CASE("sell execution is side symmetric and walks displayed bids", "[execution]") {
+  const std::vector<Event> market{
+      event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      event(1, Add{1, Side::Buy, 3, 100, "AAPL", {}}),
+      event(1, Add{2, Side::Buy, 4, 99, "AAPL", {}}),
+      event(1, Add{3, Side::Sell, 10, 102, "AAPL", {}}),
+      event(2, aegisx::System{'O'}),
+  };
+  aegisx::ExecutionConfig config;
+  config.intervals = 1;
+  config.max_child_quantity = 5;
+  const auto report =
+      aegisx::ExecutionSimulator{}.run(market, {27, 1, "AAPL", Side::Sell, 5, 2, 3}, aegisx::Strategy::Twap, config);
+  REQUIRE(report.average_price);
+  CHECK(*report.average_price == 99.6);
+  CHECK(report.filled == 5);
+  CHECK(report.depth_consumed == 5);
+}
+
+TEST_CASE("risk reservations, marked PnL, rate limits, and kill switch are enforced", "[risk]") {
   aegisx::RiskLimits limits;
   limits.max_order_quantity = 10;
   limits.max_open_order_exposure_ticks = 1'500;
@@ -301,4 +491,67 @@ TEST_CASE("risk reservations, marked PnL, rate limits, and kill switch are enfor
   CHECK(risk.position(1)->unrealized_pnl == -100);
   risk.kill(true);
   CHECK(risk.approve({"three", 1, "AAPL", Side::Buy, 1, 90, 5}).reason == aegisx::RiskRejectReason::KillSwitchActive);
+  CHECK_FALSE(risk.audit_log().empty());
+  CHECK(risk.position(1)->total_pnl == risk.position(1)->realized_pnl + risk.position(1)->unrealized_pnl);
+}
+
+TEST_CASE("risk includes reservations in gross and net exposure and caps open order count", "[risk]") {
+  aegisx::RiskLimits limits;
+  limits.max_orders_per_window = 100;
+  limits.max_open_orders = 1;
+  limits.max_order_quantity = 100;
+  limits.max_position = 1'000;
+  limits.max_open_order_exposure_ticks = 1'000'000;
+  limits.max_gross_exposure_ticks = 1'000'000;
+  limits.max_net_exposure_ticks = 1'000'000;
+  limits.max_symbol_exposure_ticks = 1'000'000;
+  aegisx::RiskEngine risk(limits);
+  risk.mark(1, "AAPL", 100, 1);
+  REQUIRE(risk.approve({"one", 1, "AAPL", Side::Buy, 10, 100, 2}).approved);
+  CHECK(risk.net_exposure() == 1'000);
+  CHECK(risk.open_order_count() == 1);
+  const auto rejected = risk.approve({"two", 1, "AAPL", Side::Sell, 1, 100, 3});
+  CHECK(rejected.reason == aegisx::RiskRejectReason::OpenOrderExposureLimit);
+  CHECK(risk.open_order_count() == 1);
+}
+
+TEST_CASE("execution risk rejection leaves parent conservation intact", "[execution][risk]") {
+  const auto market = execution_market();
+  aegisx::RiskLimits limits;
+  limits.max_order_quantity = 2;
+  limits.max_parent_quantity = 10;
+  limits.max_orders_per_window = 100;
+  aegisx::RiskEngine risk(limits);
+  aegisx::ExecutionConfig config;
+  config.intervals = 1;
+  config.max_child_quantity = 4;
+  config.force_completion_at_end = false;
+  config.risk_engine = &risk;
+  const aegisx::ParentOrder parent{11, 1, "AAPL", Side::Buy, 4, 2, 7};
+  const auto report = aegisx::ExecutionSimulator{}.run(market, parent, aegisx::Strategy::Twap, config);
+  CHECK(report.filled == 0);
+  CHECK(report.rejected_child_count > 0);
+  CHECK(report.parent_state.terminal_unfilled == parent.target_quantity);
+  CHECK(report.parent_state.invariant_error().empty());
+  CHECK(risk.open_order_count() == 0);
+}
+
+TEST_CASE("position accounting handles increase reduction reversal and close", "[risk]") {
+  aegisx::RiskEngine risk;
+  risk.mark(1, "AAPL", 100, 1);
+  risk.fill(1, "AAPL", Side::Buy, 10, 100);
+  risk.fill(1, "AAPL", Side::Sell, 4, 110);
+  REQUIRE(risk.position(1));
+  CHECK(risk.position(1)->net_quantity == 6);
+  CHECK(risk.position(1)->average_open_price == 100);
+  CHECK(risk.position(1)->realized_pnl == 40);
+  risk.fill(1, "AAPL", Side::Sell, 10, 90);
+  CHECK(risk.position(1)->net_quantity == -4);
+  CHECK(risk.position(1)->average_open_price == 90);
+  CHECK(risk.position(1)->realized_pnl == -20);
+  risk.fill(1, "AAPL", Side::Buy, 4, 80);
+  CHECK(risk.position(1)->net_quantity == 0);
+  CHECK(risk.position(1)->average_open_price == 0);
+  CHECK(risk.position(1)->realized_pnl == 20);
+  CHECK(risk.position(1)->total_pnl == 20);
 }

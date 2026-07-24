@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -63,26 +64,112 @@ void write_risk_demo(const std::filesystem::path& output) {
   std::ofstream csv(output / "risk_rejections.csv");
   if (!csv) throw std::runtime_error("could not open risk output");
   csv << "scenario,approved,reject_reason,limit_name,observed_value,configured_limit\n";
-  aegisx::RiskLimits limits;
-  limits.max_order_quantity = 20;
-  limits.max_open_order_exposure_ticks = 2'000;
-  limits.max_orders_per_window = 2;
-  limits.max_drawdown_ticks = 50;
-  aegisx::RiskEngine risk(limits);
-  risk.mark(1, "AAPL", 100, 1);
-  const auto append = [&](const std::string_view scenario, const aegisx::RiskRequest& request) {
+  std::ofstream audit(output / "risk_audit.csv");
+  if (!audit) throw std::runtime_error("could not open risk audit output");
+  audit << "scenario,timestamp_ns,request_id,event,approved,reject_reason,quantity,exposure_ticks\n";
+  const auto append = [&](const std::string_view scenario, aegisx::RiskEngine& risk,
+                          const aegisx::RiskRequest& request) {
     const auto decision = risk.approve(request);
     csv << scenario << ',' << (decision.approved ? "true" : "false") << ',' << aegisx::to_string(decision.reason) << ','
         << decision.limit_name << ',' << decision.observed_value << ',' << decision.configured_limit << '\n';
+    for (const auto& record : risk.audit_log())
+      audit << scenario << ',' << record.timestamp << ',' << record.request_id << ',' << record.event << ','
+            << (record.approved ? "true" : "false") << ',' << aegisx::to_string(record.reason) << ',' << record.quantity
+            << ',' << record.exposure_ticks << '\n';
   };
-  append("valid", {"valid", 1, "AAPL", aegisx::Side::Buy, 10, 100, 2});
-  append("quantity", {"quantity", 1, "AAPL", aegisx::Side::Buy, 21, 100, 3});
-  append("reserved_exposure", {"reserved", 1, "AAPL", aegisx::Side::Buy, 20, 100, 4});
-  append("second_valid", {"second", 1, "AAPL", aegisx::Side::Buy, 1, 100, 5});
-  append("rate_limit", {"rate", 1, "AAPL", aegisx::Side::Buy, 1, 100, 6});
-  append("stale", {"stale", 1, "AAPL", aegisx::Side::Buy, 1, 100, 6'000'000'002ULL});
-  risk.kill(true);
-  append("kill_switch", {"kill", 1, "AAPL", aegisx::Side::Buy, 1, 100, 6});
+  const auto engine = [](aegisx::RiskLimits limits = {}) {
+    aegisx::RiskEngine risk(limits);
+    risk.mark(1, "AAPL", 100, 1);
+    return risk;
+  };
+  {
+    auto risk = engine();
+    append("valid", risk, {"valid", 1, "AAPL", aegisx::Side::Buy, 10, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_order_quantity = 5;
+    auto risk = engine(limits);
+    append("quantity_limit", risk, {"quantity", 1, "AAPL", aegisx::Side::Buy, 6, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_order_notional_ticks = 500;
+    auto risk = engine(limits);
+    append("notional_limit", risk, {"notional", 1, "AAPL", aegisx::Side::Buy, 6, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_position = 5;
+    auto risk = engine(limits);
+    append("position_limit", risk, {"position", 1, "AAPL", aegisx::Side::Buy, 6, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_gross_exposure_ticks = 500;
+    auto risk = engine(limits);
+    append("gross_exposure", risk, {"gross", 1, "AAPL", aegisx::Side::Buy, 6, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_net_exposure_ticks = 500;
+    auto risk = engine(limits);
+    append("net_exposure", risk, {"net", 1, "AAPL", aegisx::Side::Buy, 6, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_symbol_exposure_ticks = 500;
+    auto risk = engine(limits);
+    append("concentration", risk, {"concentration", 1, "AAPL", aegisx::Side::Buy, 6, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_open_order_exposure_ticks = 500;
+    auto risk = engine(limits);
+    append("open_order_exposure", risk, {"reservation", 1, "AAPL", aegisx::Side::Buy, 6, 100, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_orders_per_window = 1;
+    auto risk = engine(limits);
+    static_cast<void>(risk.approve({"rate-primer", 1, "AAPL", aegisx::Side::Buy, 1, 100, 2}));
+    append("rate_limit", risk, {"rate", 1, "AAPL", aegisx::Side::Buy, 1, 100, 3});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.collar_bps = 100.0;
+    auto risk = engine(limits);
+    append("price_collar", risk, {"collar", 1, "AAPL", aegisx::Side::Buy, 1, 110, 2});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.stale_ns = 5;
+    auto risk = engine(limits);
+    append("stale_market", risk, {"stale", 1, "AAPL", aegisx::Side::Buy, 1, 100, 7});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_loss_ticks = 50;
+    auto risk = engine(limits);
+    risk.fill(1, "AAPL", aegisx::Side::Buy, 10, 100);
+    risk.mark(1, "AAPL", 80, 2);
+    append("daily_loss", risk, {"loss", 1, "AAPL", aegisx::Side::Buy, 1, 80, 3});
+  }
+  {
+    aegisx::RiskLimits limits;
+    limits.max_loss_ticks = 1'000'000;
+    limits.max_drawdown_ticks = 50;
+    auto risk = engine(limits);
+    risk.fill(1, "AAPL", aegisx::Side::Buy, 10, 100);
+    risk.mark(1, "AAPL", 120, 2);
+    risk.mark(1, "AAPL", 100, 3);
+    append("drawdown", risk, {"drawdown", 1, "AAPL", aegisx::Side::Buy, 1, 100, 4});
+  }
+  {
+    auto risk = engine();
+    risk.kill(true, 2);
+    append("kill_switch", risk, {"kill", 1, "AAPL", aegisx::Side::Buy, 1, 100, 2});
+  }
 }
 
 void run_benchmark(const std::filesystem::path& input, const std::filesystem::path& output) {
@@ -108,16 +195,20 @@ aegisx::Event execution_event(const aegisx::Timestamp timestamp, aegisx::Payload
   return {timestamp, std::move(payload), 1, 1};
 }
 
-std::vector<aegisx::Event> execution_scenario(const aegisx::Price bid, const aegisx::Price ask) {
+std::vector<aegisx::Event> execution_scenario(const aegisx::Price bid, const aegisx::Price ask,
+                                              const aegisx::Quantity initial_bid_depth,
+                                              const aegisx::Quantity early_volume, const aegisx::Quantity late_volume) {
   return {
       execution_event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
-      execution_event(1, aegisx::Add{1, aegisx::Side::Buy, 10, bid, "AAPL", {}}),
+      execution_event(1, aegisx::Add{1, aegisx::Side::Buy, initial_bid_depth, bid, "AAPL", {}}),
       execution_event(1, aegisx::Add{3, aegisx::Side::Sell, 20, ask, "AAPL", {}}),
       execution_event(2, aegisx::System{'O'}),
+      execution_event(3, aegisx::Trade{10, aegisx::Side::Buy, early_volume, ask, "AAPL", 10, true}),
       execution_event(5, aegisx::System{'Q'}),
-      execution_event(6, aegisx::Execute{1, 10, 1}),
-      execution_event(7, aegisx::Add{2, aegisx::Side::Buy, 10, bid, "AAPL", {}}),
-      execution_event(8, aegisx::Execute{2, 10, 2}),
+      execution_event(6, aegisx::Execute{1, initial_bid_depth, 1}),
+      execution_event(7, aegisx::Trade{11, aegisx::Side::Buy, late_volume, ask, "AAPL", 11, true}),
+      execution_event(7, aegisx::Add{2, aegisx::Side::Buy, 30, bid, "AAPL", {}}),
+      execution_event(8, aegisx::Execute{2, 30, 2}),
   };
 }
 
@@ -126,36 +217,66 @@ void run_execution_benchmark(const std::filesystem::path& output) {
     const char* name;
     aegisx::Price bid;
     aegisx::Price ask;
+    aegisx::Quantity initial_bid_depth;
+    aegisx::Quantity early_volume;
+    aegisx::Quantity late_volume;
   };
   const std::vector<Scenario> scenarios{
-      {"tight_spread", 100'000, 100'200}, {"wide_spread", 99'000, 100'000}, {"volatile_spread", 98'000, 101'000}};
+      {"normal_liquidity", 100'000, 100'200, 10, 50, 50},     {"thin_liquidity", 100'000, 100'500, 5, 20, 20},
+      {"high_volatility", 98'000, 102'000, 10, 50, 50},       {"wide_spread", 99'000, 101'000, 10, 50, 50},
+      {"front_loaded_volume", 100'000, 100'300, 10, 100, 10}, {"back_loaded_volume", 100'000, 100'300, 10, 10, 100},
+  };
   aegisx::ExecutionConfig config;
-  config.intervals = 2;
-  config.max_child_quantity = 5;
-  config.force_completion_at_end = false;
+  config.intervals = 4;
+  config.max_child_quantity = 10;
+  config.vwap_profile = aegisx::VolumeProfile{
+      {0.50, 0.30, 0.15, 0.05}, "synthetic_prior_session", "synthetic_evaluation_session", "deterministic-profile-v1"};
+  config.force_completion_at_end = true;
   aegisx::ExecutionSimulator simulator;
   std::filesystem::create_directories(output);
   std::ofstream csv(output / "execution_benchmark.csv");
   if (!csv) throw std::runtime_error("could not open execution benchmark output");
-  csv << "scenario,twap_average_price_ticks,adaptive_average_price_ticks,adaptive_savings_bps\n";
+  csv << "scenario,strategy,average_price_ticks,filled,unfilled,fill_rate,implementation_shortfall_bps,"
+         "passive_ratio,fees_ticks,schedule_deviation,savings_vs_twap_bps\n";
   double total_savings_bps = 0.0;
+  std::vector<double> savings;
   for (const auto& scenario : scenarios) {
-    const auto events = execution_scenario(scenario.bid, scenario.ask);
+    const auto events = execution_scenario(scenario.bid, scenario.ask, scenario.initial_bid_depth,
+                                           scenario.early_volume, scenario.late_volume);
     const aegisx::ParentOrder parent{1, 1, "AAPL", aegisx::Side::Buy, 10, 2, 8};
     const auto twap = simulator.run(events, parent, aegisx::Strategy::Twap, config);
-    const auto adaptive = simulator.run(events, parent, aegisx::Strategy::Adaptive, config);
-    if (!twap.average_price || !adaptive.average_price || twap.filled != parent.target_quantity ||
-        adaptive.filled != parent.target_quantity) {
-      throw std::runtime_error("synthetic execution benchmark did not complete both parents");
+    if (!twap.average_price || twap.filled != parent.target_quantity)
+      throw std::runtime_error("synthetic TWAP benchmark did not complete");
+    for (const auto strategy :
+         {aegisx::Strategy::Twap, aegisx::Strategy::Vwap, aegisx::Strategy::Pov, aegisx::Strategy::Adaptive}) {
+      const auto report = strategy == aegisx::Strategy::Twap ? twap : simulator.run(events, parent, strategy, config);
+      const std::optional<double> savings_bps =
+          report.average_price
+              ? std::optional<double>{(*twap.average_price - *report.average_price) / *twap.average_price * 10'000.0}
+              : std::nullopt;
+      csv << scenario.name << ',' << aegisx::to_string(strategy) << ','
+          << (report.average_price ? std::to_string(*report.average_price) : "") << ',' << report.filled << ','
+          << report.unfilled << ',' << report.fill_rate << ','
+          << (report.implementation_shortfall_bps ? std::to_string(*report.implementation_shortfall_bps) : "") << ','
+          << report.passive_ratio << ',' << report.fees << ',' << report.maximum_schedule_deviation << ','
+          << (savings_bps ? std::to_string(*savings_bps) : "") << '\n';
+      if (strategy == aegisx::Strategy::Adaptive) {
+        if (!savings_bps || report.filled != parent.target_quantity)
+          throw std::runtime_error("synthetic adaptive benchmark did not complete");
+        total_savings_bps += *savings_bps;
+        savings.push_back(*savings_bps);
+      }
     }
-    const double savings_bps = (*twap.average_price - *adaptive.average_price) / *twap.average_price * 10'000.0;
-    total_savings_bps += savings_bps;
-    csv << scenario.name << ',' << *twap.average_price << ',' << *adaptive.average_price << ',' << savings_bps << '\n';
   }
+  const double mean_savings = total_savings_bps / static_cast<double>(savings.size());
+  double variance = 0.0;
+  for (const double value : savings) variance += (value - mean_savings) * (value - mean_savings);
+  const double standard_deviation = std::sqrt(variance / static_cast<double>(savings.size()));
   std::ofstream metadata(output / "execution_benchmark.json");
-  metadata << "{\n  \"scenarios\": " << scenarios.size()
-           << ",\n  \"mean_adaptive_savings_bps\": " << total_savings_bps / static_cast<double>(scenarios.size())
-           << "\n}\n";
+  metadata << "{\n  \"scenarios\": " << scenarios.size() << ",\n  \"strategies\": 4"
+           << ",\n  \"mean_adaptive_savings_bps\": " << mean_savings
+           << ",\n  \"standard_deviation_adaptive_savings_bps\": " << standard_deviation
+           << ",\n  \"synthetic\": true\n}\n";
 }
 
 void run_risk_benchmark(const std::filesystem::path& output, const std::size_t iterations) {
@@ -165,6 +286,8 @@ void run_risk_benchmark(const std::filesystem::path& output, const std::size_t i
   limits.max_order_notional_ticks = 1'000;
   limits.max_open_order_exposure_ticks = 1'000;
   limits.max_orders_per_window = std::numeric_limits<std::uint32_t>::max();
+  limits.max_open_orders = 2;
+  limits.enable_audit_log = false;
   aegisx::RiskEngine risk(limits);
   risk.mark(1, "AAPL", 100, 1);
   std::vector<std::int64_t> samples;
@@ -182,14 +305,23 @@ void run_risk_benchmark(const std::filesystem::path& output, const std::size_t i
   }
   const auto finished = std::chrono::steady_clock::now();
   std::sort(samples.begin(), samples.end());
+  const std::size_t p50_index = (samples.size() * 50U + 99U) / 100U - 1U;
+  const std::size_t p95_index = (samples.size() * 95U + 99U) / 100U - 1U;
   const std::size_t p99_index = (samples.size() * 99U + 99U) / 100U - 1U;
   const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(finished - started).count();
   const double checks_per_second = static_cast<double>(iterations) * 1'000'000'000.0 / static_cast<double>(elapsed_ns);
   std::filesystem::create_directories(output);
   std::ofstream metadata(output / "risk_benchmark.json");
   if (!metadata) throw std::runtime_error("could not open risk benchmark output");
-  metadata << "{\n  \"iterations\": " << iterations << ",\n  \"p99_nanoseconds\": " << samples[p99_index]
-           << ",\n  \"checks_per_second\": " << checks_per_second << "\n}\n";
+  metadata << "{\n  \"iterations\": " << iterations << ",\n  \"timed_operation\": \"approve only\""
+           << ",\n  \"throughput_operation\": \"approve plus reservation release\""
+           << ",\n  \"p50_nanoseconds\": " << samples[p50_index] << ",\n  \"p95_nanoseconds\": " << samples[p95_index]
+           << ",\n  \"p99_nanoseconds\": " << samples[p99_index] << ",\n  \"max_nanoseconds\": " << samples.back()
+           << ",\n  \"checks_per_second\": " << checks_per_second
+           << ",\n  \"enabled_limits\": [\"order_quantity\", \"order_notional\", \"position\", "
+              "\"symbol_exposure\", \"open_order_exposure\", \"gross_exposure\", \"net_exposure\", "
+              "\"concentration\", \"rate\", \"collar\", \"staleness\", \"loss\", \"drawdown\", \"kill_switch\"]"
+           << ",\n  \"reservation_updates\": true\n}\n";
 }
 
 }  // namespace
@@ -246,7 +378,7 @@ int main(const int argc, char** argv) {
       run_execution_benchmark(output);
       std::cout << "AegisX wrote synthetic execution benchmark\n";
     } else if (command == "risk-benchmark") {
-      run_risk_benchmark(output, size_option(argc, argv, "--iterations").value_or(100'000));
+      run_risk_benchmark(output, size_option(argc, argv, "--iterations").value_or(1'000'000));
       std::cout << "AegisX wrote risk benchmark\n";
     } else {
       throw std::runtime_error("unknown command: " + command);

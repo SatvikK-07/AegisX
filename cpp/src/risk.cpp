@@ -74,44 +74,60 @@ void RiskEngine::mark(const StockLocate stock_locate, std::string symbol, const 
   position.unrealized_pnl = checked_multiply(
       position.net_quantity, checked_subtract(price, position.average_open_price, "unrealized P&L overflow"),
       "unrealized P&L overflow");
+  position.total_pnl = checked_add(position.realized_pnl, position.unrealized_pnl, "position total P&L overflow");
   high_water_pnl_ = std::max(high_water_pnl_, total_pnl());
 }
 
 RiskDecision RiskEngine::approve(const RiskRequest& request) {
+  const auto audited = [&](const RiskDecision decision) {
+    if (limits_.enable_audit_log)
+      audit_log_.push_back(
+          {request.timestamp, request.id, "approve", decision.approved, decision.reason, request.quantity,
+           request.price >= 0 && request.quantity > 0 ? notional(request.price, request.quantity) : 0});
+    return decision;
+  };
   if (request.id.empty() || request.symbol.empty() || request.quantity <= 0 || request.price < 0) {
-    return reject(RiskRejectReason::InvalidOrder, "order_fields", 0, 0);
+    return audited(reject(RiskRejectReason::InvalidOrder, "order_fields", 0, 0));
   }
-  if (!limits_.enabled) return reject(RiskRejectReason::TradingDisabled, "trading_enabled", 0, 1);
-  if (limits_.kill_switch) return reject(RiskRejectReason::KillSwitchActive, "kill_switch", 1, 0);
-  if (reservations_.contains(request.id)) return reject(RiskRejectReason::InvalidOrder, "request_id", 1, 0);
+  if (!limits_.enabled) return audited(reject(RiskRejectReason::TradingDisabled, "trading_enabled", 0, 1));
+  if (limits_.kill_switch) return audited(reject(RiskRejectReason::KillSwitchActive, "kill_switch", 1, 0));
+  if (reservations_.contains(request.id)) return audited(reject(RiskRejectReason::InvalidOrder, "request_id", 1, 0));
   if (request.quantity > limits_.max_order_quantity) {
-    return reject(RiskRejectReason::OrderQuantityLimit, "max_order_quantity", request.quantity,
-                  limits_.max_order_quantity);
+    return audited(reject(RiskRejectReason::OrderQuantityLimit, "max_order_quantity", request.quantity,
+                          limits_.max_order_quantity));
   }
   const Money request_notional = notional(request.price, request.quantity);
   if (request_notional > limits_.max_order_notional_ticks) {
-    return reject(RiskRejectReason::OrderNotionalLimit, "max_order_notional_ticks", request_notional,
-                  limits_.max_order_notional_ticks);
+    return audited(reject(RiskRejectReason::OrderNotionalLimit, "max_order_notional_ticks", request_notional,
+                          limits_.max_order_notional_ticks));
   }
   const auto mark = marks_.find(request.stock_locate);
   if (mark == marks_.end() || mark->second.symbol != request.symbol || request.timestamp < mark->second.timestamp ||
       request.timestamp - mark->second.timestamp > limits_.stale_ns) {
-    return reject(RiskRejectReason::StaleMarketData, "stale_ns", 0, static_cast<std::int64_t>(limits_.stale_ns));
+    return audited(
+        reject(RiskRejectReason::StaleMarketData, "stale_ns", 0, static_cast<std::int64_t>(limits_.stale_ns)));
   }
   const double permitted_distance = static_cast<double>(mark->second.price) * limits_.collar_bps / 10'000.0;
   const double distance = std::abs(static_cast<double>(request.price) - static_cast<double>(mark->second.price));
   if (distance > permitted_distance) {
-    return reject(RiskRejectReason::PriceCollarViolation, "collar_bps", static_cast<std::int64_t>(distance),
-                  static_cast<std::int64_t>(permitted_distance));
+    return audited(reject(RiskRejectReason::PriceCollarViolation, "collar_bps", static_cast<std::int64_t>(distance),
+                          static_cast<std::int64_t>(permitted_distance)));
   }
-  approval_timestamps_.erase(std::remove_if(approval_timestamps_.begin(), approval_timestamps_.end(),
-                                            [&](const Timestamp timestamp) {
-                                              return request.timestamp - timestamp >= limits_.order_rate_window_ns;
-                                            }),
-                             approval_timestamps_.end());
+  if (!approval_timestamps_.empty() && request.timestamp < approval_timestamps_.back())
+    return audited(reject(RiskRejectReason::InvalidOrder, "monotonic_timestamp",
+                          static_cast<std::int64_t>(request.timestamp),
+                          static_cast<std::int64_t>(approval_timestamps_.back())));
+  while (!approval_timestamps_.empty() &&
+         request.timestamp - approval_timestamps_.front() >= limits_.order_rate_window_ns)
+    approval_timestamps_.pop_front();
   if (approval_timestamps_.size() >= limits_.max_orders_per_window) {
-    return reject(RiskRejectReason::OrderRateLimit, "max_orders_per_window",
-                  static_cast<std::int64_t>(approval_timestamps_.size()), limits_.max_orders_per_window);
+    return audited(reject(RiskRejectReason::OrderRateLimit, "max_orders_per_window",
+                          static_cast<std::int64_t>(approval_timestamps_.size()), limits_.max_orders_per_window));
+  }
+  if (reservations_.size() >= limits_.max_open_orders) {
+    return audited(reject(RiskRejectReason::OpenOrderExposureLimit, "max_open_orders",
+                          static_cast<std::int64_t>(reservations_.size()),
+                          static_cast<std::int64_t>(limits_.max_open_orders)));
   }
   Quantity pending_quantity = 0;
   for (const auto& [id, reservation] : reservations_) {
@@ -127,54 +143,65 @@ RiskDecision RiskEngine::approve(const RiskRequest& request) {
                            pending_quantity),
       signed_request);
   if (absolute_quantity(projected_quantity) > limits_.max_position) {
-    return reject(RiskRejectReason::PositionLimit, "max_position", absolute_quantity(projected_quantity),
-                  limits_.max_position);
+    return audited(reject(RiskRejectReason::PositionLimit, "max_position", absolute_quantity(projected_quantity),
+                          limits_.max_position));
   }
   const Money projected_symbol_exposure = notional(mark->second.price, absolute_quantity(projected_quantity));
   if (projected_symbol_exposure > limits_.max_symbol_exposure_ticks) {
-    return reject(RiskRejectReason::ConcentrationLimit, "max_symbol_exposure_ticks", projected_symbol_exposure,
-                  limits_.max_symbol_exposure_ticks);
+    return audited(reject(RiskRejectReason::ConcentrationLimit, "max_symbol_exposure_ticks", projected_symbol_exposure,
+                          limits_.max_symbol_exposure_ticks));
   }
   const Money projected_reserved = checked_add(reserved_exposure(), request_notional, "reserved exposure overflow");
   if (projected_reserved > limits_.max_open_order_exposure_ticks) {
-    return reject(RiskRejectReason::OpenOrderExposureLimit, "max_open_order_exposure_ticks", projected_reserved,
-                  limits_.max_open_order_exposure_ticks);
+    return audited(reject(RiskRejectReason::OpenOrderExposureLimit, "max_open_order_exposure_ticks", projected_reserved,
+                          limits_.max_open_order_exposure_ticks));
   }
-  const Money projected_gross = checked_add(gross_exposure(), request_notional, "gross exposure overflow");
+  const Money projected_gross =
+      checked_add(checked_add(gross_exposure(), reserved_exposure(), "gross exposure overflow"), request_notional,
+                  "gross exposure overflow");
   if (projected_gross > limits_.max_gross_exposure_ticks) {
-    return reject(RiskRejectReason::GrossExposureLimit, "max_gross_exposure_ticks", projected_gross,
-                  limits_.max_gross_exposure_ticks);
+    return audited(reject(RiskRejectReason::GrossExposureLimit, "max_gross_exposure_ticks", projected_gross,
+                          limits_.max_gross_exposure_ticks));
   }
-  Money net_exposure = 0;
-  for (const auto& [stock_locate, state] : positions_) {
-    const auto current_mark = marks_.find(stock_locate);
-    if (current_mark != marks_.end()) {
-      net_exposure = checked_add(
-          net_exposure, checked_multiply(state.net_quantity, current_mark->second.price, "net exposure overflow"),
-          "net exposure overflow");
-    }
+  const Money projected_net =
+      checked_add(net_exposure(), checked_multiply(signed_request, request.price, "net exposure overflow"),
+                  "net exposure overflow");
+  if (absolute_quantity(projected_net) > limits_.max_net_exposure_ticks) {
+    return audited(reject(RiskRejectReason::NetExposureLimit, "max_net_exposure_ticks",
+                          absolute_quantity(projected_net), limits_.max_net_exposure_ticks));
   }
-  net_exposure = checked_add(net_exposure, checked_multiply(signed_request, request.price, "net exposure overflow"),
-                             "net exposure overflow");
-  if (absolute_quantity(net_exposure) > limits_.max_net_exposure_ticks) {
-    return reject(RiskRejectReason::NetExposureLimit, "max_net_exposure_ticks", absolute_quantity(net_exposure),
-                  limits_.max_net_exposure_ticks);
+  if (projected_gross > 0 && static_cast<double>(projected_symbol_exposure) / static_cast<double>(projected_gross) >
+                                 limits_.max_concentration_fraction) {
+    return audited(reject(RiskRejectReason::ConcentrationLimit, "max_concentration_fraction_bps",
+                          static_cast<std::int64_t>(std::llround(static_cast<double>(projected_symbol_exposure) /
+                                                                 static_cast<double>(projected_gross) * 10'000.0)),
+                          static_cast<std::int64_t>(std::llround(limits_.max_concentration_fraction * 10'000.0))));
   }
   if (-total_pnl() > limits_.max_loss_ticks) {
-    return reject(RiskRejectReason::DailyLossLimit, "max_loss_ticks", -total_pnl(), limits_.max_loss_ticks);
+    return audited(reject(RiskRejectReason::DailyLossLimit, "max_loss_ticks", -total_pnl(), limits_.max_loss_ticks));
   }
   if (drawdown() > limits_.max_drawdown_ticks) {
-    return reject(RiskRejectReason::DrawdownLimit, "max_drawdown_ticks", drawdown(), limits_.max_drawdown_ticks);
+    return audited(
+        reject(RiskRejectReason::DrawdownLimit, "max_drawdown_ticks", drawdown(), limits_.max_drawdown_ticks));
   }
-  reservations_.emplace(request.id, Reservation{request.stock_locate, request.side, request.quantity, request.price});
+  reservations_.emplace(
+      request.id, Reservation{request.stock_locate, request.side, request.quantity, request.price, request.timestamp});
   approval_timestamps_.push_back(request.timestamp);
-  return {true, RiskRejectReason::None, "", 0, 0};
+  return audited({true, RiskRejectReason::None, "", 0, 0});
 }
 
-void RiskEngine::release(const std::string_view request_id) { reservations_.erase(std::string(request_id)); }
+void RiskEngine::release(const std::string_view request_id, const Timestamp timestamp) {
+  const auto reservation = reservations_.find(std::string(request_id));
+  if (reservation == reservations_.end()) return;
+  if (limits_.enable_audit_log)
+    audit_log_.push_back({timestamp == 0 ? reservation->second.approval_timestamp : timestamp, std::string(request_id),
+                          "release", true, RiskRejectReason::None, reservation->second.remaining,
+                          notional(reservation->second.price, reservation->second.remaining)});
+  reservations_.erase(reservation);
+}
 
 void RiskEngine::fill(const std::string_view request_id, const Quantity quantity, const Price price,
-                      const Money fee_ticks) {
+                      const Money fee_ticks, const Timestamp timestamp) {
   const auto reservation = reservations_.find(std::string(request_id));
   if (reservation == reservations_.end()) throw std::runtime_error("unknown risk reservation");
   if (quantity <= 0 || quantity > reservation->second.remaining)
@@ -182,6 +209,9 @@ void RiskEngine::fill(const std::string_view request_id, const Quantity quantity
   const auto mark = marks_.find(reservation->second.stock_locate);
   if (mark == marks_.end()) throw std::runtime_error("missing mark for reserved fill");
   fill(reservation->second.stock_locate, mark->second.symbol, reservation->second.side, quantity, price, fee_ticks);
+  if (limits_.enable_audit_log)
+    audit_log_.push_back({timestamp == 0 ? mark->second.timestamp : timestamp, std::string(request_id), "fill", true,
+                          RiskRejectReason::None, quantity, notional(price, quantity)});
   reservation->second.remaining -= quantity;
   if (reservation->second.remaining == 0) reservations_.erase(reservation);
 }
@@ -223,10 +253,16 @@ void RiskEngine::fill(const StockLocate stock_locate, const std::string_view sym
         state.net_quantity, checked_subtract(mark->second.price, state.average_open_price, "unrealized P&L overflow"),
         "unrealized P&L overflow");
   }
+  state.total_pnl = checked_add(state.realized_pnl, state.unrealized_pnl, "position total P&L overflow");
   high_water_pnl_ = std::max(high_water_pnl_, total_pnl());
 }
 
-void RiskEngine::kill(const bool active) { limits_.kill_switch = active; }
+void RiskEngine::kill(const bool active, const Timestamp timestamp) {
+  limits_.kill_switch = active;
+  if (limits_.enable_audit_log)
+    audit_log_.push_back({timestamp, "", active ? "kill_activate" : "kill_release", true, RiskRejectReason::None, 0,
+                          reserved_exposure()});
+}
 
 const PositionState* RiskEngine::position(const StockLocate stock_locate) const {
   const auto found = positions_.find(stock_locate);
@@ -268,6 +304,24 @@ Money RiskEngine::gross_exposure() const {
   return total;
 }
 
+Money RiskEngine::net_exposure() const {
+  Money total = 0;
+  for (const auto& [stock_locate, state] : positions_) {
+    const auto mark = marks_.find(stock_locate);
+    if (mark != marks_.end())
+      total = checked_add(total, checked_multiply(state.net_quantity, mark->second.price, "net exposure overflow"),
+                          "net exposure overflow");
+  }
+  for (const auto& [id, reservation] : reservations_) {
+    static_cast<void>(id);
+    const Money signed_notional = checked_multiply(
+        reservation.price, reservation.side == Side::Buy ? reservation.remaining : -reservation.remaining,
+        "reserved net exposure overflow");
+    total = checked_add(total, signed_notional, "net exposure overflow");
+  }
+  return total;
+}
+
 Money RiskEngine::reserved_exposure() const {
   Money total = 0;
   for (const auto& [id, reservation] : reservations_) {
@@ -276,5 +330,11 @@ Money RiskEngine::reserved_exposure() const {
   }
   return total;
 }
+
+std::size_t RiskEngine::open_order_count() const { return reservations_.size(); }
+
+const std::vector<RiskAuditRecord>& RiskEngine::audit_log() const { return audit_log_; }
+
+const RiskLimits& RiskEngine::limits() const { return limits_; }
 
 }  // namespace aegisx

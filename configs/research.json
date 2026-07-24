@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "research",
+  "horizon_rows": 1,
+  "embargo_rows": 1,
+  "features": [
+    "spread_ticks",
+    "bid_depth",
+    "ask_depth",
+    "top_imbalance",
+    "order_flow_imbalance",
+    "mid_return_lag1",
+    "microprice_deviation_ticks",
+    "rolling_mid_volatility",
+    "trade_intensity",
+    "depth_ratio",
+    "log_displayed_depth",
+    "time_of_day_sin",
+    "time_of_day_cos",
+    "queue_position_fraction"
+  ],
+  "random_seed": 7
+}

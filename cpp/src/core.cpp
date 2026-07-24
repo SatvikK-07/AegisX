@@ -93,6 +93,22 @@ std::string to_string(const Strategy strategy) {
 
 std::string to_string(const LiquidityRole role) { return role == LiquidityRole::Maker ? "maker" : "taker"; }
 
+std::string to_string(const ExecutionAction action) {
+  switch (action) {
+    case ExecutionAction::Wait:
+      return "wait";
+    case ExecutionAction::SubmitPassive:
+      return "submit_passive";
+    case ExecutionAction::SubmitAggressive:
+      return "submit_aggressive";
+    case ExecutionAction::CancelPassive:
+      return "cancel_passive";
+    case ExecutionAction::RepricePassive:
+      return "reprice_passive";
+  }
+  return "unknown";
+}
+
 std::string to_string(const RiskRejectReason reason) {
   switch (reason) {
     case RiskRejectReason::None:

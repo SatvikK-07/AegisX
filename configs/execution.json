@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "execution",
+  "intervals": 4,
+  "max_child_quantity": 100,
+  "completion_policy": "force_market",
+  "latency_ns": {
+    "market_data": 0,
+    "decision": 0,
+    "transmission": 0,
+    "exchange_ack": 0
+  },
+  "fees": {
+    "maker_per_share_ticks": 0,
+    "taker_per_share_ticks": 0,
+    "maker_bps": 0.0,
+    "taker_bps": 0.0
+  },
+  "adverse_selection_horizons_ns": [1000000, 10000000, 100000000]
+}

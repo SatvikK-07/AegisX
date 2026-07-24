@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "kind": "replay",
+  "input": "data/fixtures/itch_reference_segment.itch",
+  "snapshot_every_events": 1,
+  "top_levels": 5
+}

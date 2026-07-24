@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "kind": "risk",
+  "max_order_quantity": 100,
+  "max_parent_quantity": 10000,
+  "max_open_orders": 1000,
+  "max_position": 1000,
+  "max_gross_exposure_ticks": 100000000,
+  "max_net_exposure_ticks": 100000000,
+  "max_concentration_fraction": 1.0,
+  "max_orders_per_window": 100,
+  "order_rate_window_ns": 1000000000
+}

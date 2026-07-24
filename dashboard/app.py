@@ -40,7 +40,11 @@ snapshots = load_csv(run, "snapshots.csv")
 execution = load_csv(run, "execution_comparison.csv")
 children = load_csv(run, "child_orders.csv")
 fills = load_csv(run, "execution_fills.csv")
+decisions = load_csv(run, "execution_decisions.csv")
 risk = load_csv(run, "risk_rejections.csv")
+risk_audit = load_csv(run, "risk_audit.csv")
+portfolio_stress = load_csv(run / "research", "portfolio_stress.csv")
+risk_summary = load_json(run / "research", "risk_summary.json")
 model_metrics = load_csv(run / "research", "model_metrics.csv")
 economic_metrics = load_csv(run / "research", "economic_metrics.csv")
 
@@ -81,12 +85,31 @@ with execution_tab:
     else:
         st.dataframe(execution, use_container_width=True, hide_index=True)
         st.bar_chart(execution.set_index("strategy")[["fill_rate"]])
+        strategy = st.selectbox("Execution strategy", sorted(execution["strategy"].dropna().unique()))
+        selected = execution.loc[execution["strategy"].eq(strategy)]
+        cost_columns = [
+            column
+            for column in (
+                "implementation_shortfall_bps",
+                "spread_cost_ticks",
+                "impact_proxy_ticks",
+                "net_execution_cost_ticks",
+                "maximum_schedule_deviation",
+            )
+            if column in selected
+        ]
+        if cost_columns:
+            st.caption("Cost and schedule diagnostics")
+            st.dataframe(selected[["strategy", *cost_columns]], use_container_width=True, hide_index=True)
     if not children.empty:
         st.caption("Child order audit trail")
         st.dataframe(children, use_container_width=True, hide_index=True)
     if not fills.empty:
         st.caption("Simulated fill audit trail")
         st.dataframe(fills, use_container_width=True, hide_index=True)
+    if not decisions.empty:
+        st.caption("Adaptive decision trace")
+        st.dataframe(decisions, use_container_width=True, hide_index=True)
 
 with risk_tab:
     if risk.empty:
@@ -94,6 +117,15 @@ with risk_tab:
     else:
         st.dataframe(risk, use_container_width=True, hide_index=True)
         st.bar_chart(risk.assign(count=1).groupby("reject_reason")[["count"]].sum())
+    if not risk_audit.empty:
+        st.caption("Reservation, fill, cancellation, and kill-switch lifecycle")
+        st.dataframe(risk_audit, use_container_width=True, hide_index=True)
+    if risk_summary:
+        st.caption("Portfolio risk summary")
+        st.json(risk_summary)
+    if not portfolio_stress.empty:
+        st.caption("Named portfolio stress scenarios")
+        st.bar_chart(portfolio_stress.set_index("scenario")[["pnl_ticks"]])
 
 with research:
     if not research_metadata:

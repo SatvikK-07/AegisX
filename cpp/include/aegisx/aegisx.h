@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <list>
@@ -283,8 +284,12 @@ enum class Strategy { Twap, Vwap, Pov, Adaptive };
 enum class OrderType { Market, Limit };
 enum class ChildOrderState { Pending, Open, Filled, Cancelled, Rejected };
 enum class LiquidityRole { Maker, Taker };
+enum class CompletionPolicy { LeaveUnfilled, ForceMarket };
+enum class ExecutionAction { Wait, SubmitPassive, SubmitAggressive, CancelPassive, RepricePassive };
+enum class QueueEventType { Joined, Execution, Cancellation, Fill, Cancelled };
 std::string to_string(Strategy strategy);
 std::string to_string(LiquidityRole role);
+std::string to_string(ExecutionAction action);
 struct ParentOrder {
   ParentOrderId id{};
   StockLocate stock_locate{};
@@ -293,6 +298,36 @@ struct ParentOrder {
   Quantity target_quantity{};
   Timestamp arrival_time{};
   Timestamp end_time{};
+};
+struct ParentOrderState {
+  Quantity target{};
+  Quantity scheduled{};
+  Quantity cumulative_submitted{};
+  Quantity open{};
+  Quantity filled{};
+  Quantity cumulative_cancelled{};
+  Quantity remaining_unsubmitted{};
+  Quantity terminal_unfilled{};
+  std::string invariant_error() const;
+};
+struct ArrivalBenchmark {
+  Timestamp captured_at{};
+  std::optional<Price> bid;
+  std::optional<Price> ask;
+  std::optional<double> mid;
+  std::optional<double> microprice;
+  std::optional<Price> spread;
+  Quantity displayed_bid_depth{};
+  Quantity displayed_ask_depth{};
+};
+struct QueueUpdate {
+  Timestamp timestamp{};
+  QueueEventType type{QueueEventType::Joined};
+  Quantity external_flow{};
+  Quantity queue_ahead_before{};
+  Quantity queue_ahead_after{};
+  Quantity own_quantity_before{};
+  Quantity own_quantity_after{};
 };
 struct ChildOrder {
   ChildOrderId id{};
@@ -305,26 +340,67 @@ struct ChildOrder {
   Timestamp submission_time{};
   ChildOrderState state{ChildOrderState::Pending};
   Quantity queue_ahead{};
+  StockLocate stock_locate{};
+  std::string symbol;
+  Timestamp decision_time{};
+  Timestamp exchange_arrival_time{};
+  Timestamp acknowledgment_time{};
+  std::optional<Timestamp> cancellation_time;
+  Quantity initial_queue_ahead{};
+  std::vector<QueueUpdate> queue_history;
 };
 struct Fill {
   ChildOrderId child_order_id{};
+  ParentOrderId parent_order_id{};
   Timestamp timestamp{};
   Price price{};
   Quantity quantity{};
   LiquidityRole liquidity_role{};
   Money fee{};
+  std::optional<double> pre_fill_mid;
+  std::map<Timestamp, double> adverse_selection_ticks;
 };
+struct VolumeProfile {
+  std::vector<double> interval_weights;
+  std::string training_session;
+  std::string evaluation_session;
+  std::string source_checksum;
+};
+struct DecisionTrace {
+  Timestamp timestamp{};
+  ExecutionAction action{ExecutionAction::Wait};
+  Quantity scheduled_target{};
+  Quantity filled{};
+  Quantity open{};
+  Quantity requested_quantity{};
+  std::optional<Price> bid;
+  std::optional<Price> ask;
+  std::optional<double> imbalance;
+  std::string reason;
+};
+class RiskEngine;
 struct ExecutionConfig {
   std::size_t intervals{4};
   std::vector<double> vwap_weights;
+  std::optional<VolumeProfile> vwap_profile;
   double pov_rate{0.1};
+  Quantity minimum_pov_child_quantity{1};
   Quantity max_child_quantity{100};
+  std::size_t max_aggressive_levels{100};
+  std::optional<Price> aggressive_limit_price;
+  Timestamp market_data_latency_ns{};
   Timestamp decision_latency_ns{};
   Timestamp transmission_latency_ns{};
+  Timestamp exchange_ack_latency_ns{};
   double cancellation_queue_fraction{0.5};
   Money maker_fee_per_share{};
   Money taker_fee_per_share{};
+  double maker_fee_bps{};
+  double taker_fee_bps{};
   bool force_completion_at_end{true};
+  CompletionPolicy completion_policy{CompletionPolicy::ForceMarket};
+  std::vector<Timestamp> adverse_selection_horizons_ns{1'000'000ULL, 10'000'000ULL, 100'000'000ULL};
+  RiskEngine* risk_engine{};
 };
 struct ExecutionReport {
   Strategy strategy{};
@@ -336,6 +412,8 @@ struct ExecutionReport {
   std::optional<double> average_price;
   std::optional<double> implementation_shortfall_ticks;
   Money fees{};
+  Money fees_paid{};
+  Money rebates{};
   Money opportunity_cost_ticks{};
   double passive_ratio{};
   double aggressive_ratio{};
@@ -344,6 +422,19 @@ struct ExecutionReport {
   Quantity depth_consumed{};
   std::vector<ChildOrder> children;
   std::vector<Fill> fills;
+  ParentOrderState parent_state;
+  std::optional<ArrivalBenchmark> arrival_benchmark;
+  std::optional<double> market_vwap;
+  std::optional<double> implementation_shortfall_bps;
+  std::optional<double> implementation_shortfall_currency;
+  std::optional<double> gross_execution_cost_ticks;
+  std::optional<double> spread_cost_ticks;
+  std::optional<double> impact_proxy_ticks;
+  std::optional<double> net_execution_cost_ticks;
+  double maximum_schedule_deviation{};
+  std::optional<Timestamp> completion_time_ns;
+  std::size_t rejected_child_count{};
+  std::vector<DecisionTrace> decisions;
 };
 class ExecutionSimulator {
  public:
@@ -387,6 +478,10 @@ struct RiskLimits {
   Money max_drawdown_ticks{1'000'000};
   bool enabled{true};
   bool kill_switch{};
+  Quantity max_parent_quantity{10'000};
+  std::size_t max_open_orders{1'000};
+  double max_concentration_fraction{1.0};
+  bool enable_audit_log{true};
 };
 struct RiskRequest {
   std::string id;
@@ -410,24 +505,38 @@ struct PositionState {
   Money realized_pnl{};
   Money unrealized_pnl{};
   Money fees{};
+  Money total_pnl{};
+};
+struct RiskAuditRecord {
+  Timestamp timestamp{};
+  std::string request_id;
+  std::string event;
+  bool approved{};
+  RiskRejectReason reason{RiskRejectReason::None};
+  Quantity quantity{};
+  Money exposure_ticks{};
 };
 class RiskEngine {
  public:
   explicit RiskEngine(RiskLimits limits = {});
   void mark(StockLocate stock_locate, std::string symbol, Price price, Timestamp timestamp);
   RiskDecision approve(const RiskRequest& request);
-  void release(std::string_view request_id);
-  void fill(std::string_view request_id, Quantity quantity, Price price, Money fee_ticks = 0);
+  void release(std::string_view request_id, Timestamp timestamp = 0);
+  void fill(std::string_view request_id, Quantity quantity, Price price, Money fee_ticks = 0, Timestamp timestamp = 0);
   void fill(StockLocate stock_locate, std::string_view symbol, Side side, Quantity quantity, Price price,
             Money fee_ticks = 0);
-  void kill(bool active);
+  void kill(bool active, Timestamp timestamp = 0);
   const PositionState* position(StockLocate stock_locate) const;
   Money total_realized_pnl() const;
   Money total_unrealized_pnl() const;
   Money total_pnl() const;
   Money drawdown() const;
   Money gross_exposure() const;
+  Money net_exposure() const;
   Money reserved_exposure() const;
+  std::size_t open_order_count() const;
+  const std::vector<RiskAuditRecord>& audit_log() const;
+  const RiskLimits& limits() const;
 
  private:
   struct Mark {
@@ -440,12 +549,14 @@ class RiskEngine {
     Side side{};
     Quantity remaining{};
     Price price{};
+    Timestamp approval_timestamp{};
   };
   RiskLimits limits_;
   std::map<StockLocate, PositionState> positions_;
   std::map<StockLocate, Mark> marks_;
   std::map<std::string, Reservation, std::less<>> reservations_;
-  std::vector<Timestamp> approval_timestamps_;
+  std::deque<Timestamp> approval_timestamps_;
+  std::vector<RiskAuditRecord> audit_log_;
   Money high_water_pnl_{};
 };
 
