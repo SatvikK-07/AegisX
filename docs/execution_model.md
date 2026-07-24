@@ -12,7 +12,8 @@ target, arrival, and end time. A fresh historical and latency-delayed visible
   volume with a minimum actionable child.
 - **Adaptive** emits a decision trace and selects wait, passive, or aggressive
   action from schedule deficit, urgency, spread, depth imbalance, and remaining
-  time.
+  time. In the real-data workflow it cancels remaining passive exposure during
+  the urgent final quarter and replaces it with bounded aggressive children.
 
 Market children walk a bounded number of opposite-side displayed levels, obey an
 optional worst price, and record side/price shadow consumption. Passive children
@@ -23,6 +24,11 @@ Market-data, decision, transmission, and exchange-ack latency have distinct
 timestamps. At a forced horizon, open children are cancelled, risk reservations
 are released, and a final bounded market attempt is made without inventing
 liquidity.
+
+The canonical VWAP profile is built from the complete July 30, 2019 AAPL
+Nasdaq BX stream and evaluated on August 30, 2019. Five real-session size tests
+compare 100–1,000 share buy parents. Synthetic execution scenarios remain only
+as deterministic regression tests.
 
 `ParentOrderState` enforces
 `target = filled + open + remaining_unsubmitted + terminal_unfilled` after each

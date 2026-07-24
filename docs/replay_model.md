@@ -25,8 +25,10 @@ two-sided book first permits a strategy decision. The arrival benchmark is then
 captured before that decision and remains immutable. It contains bid, ask, mid,
 microprice, spread, and five-level displayed depth.
 
-Reproducibility is checked with logical and full-state checksums. The independent
-reference fixture SHA-256 is
+Reproducibility is checked with source, logical-output, and full-state
+checksums. The canonical August real AAPL segment SHA-256 is
+`e1c89702da15158c1c2b5514119c19dcdd05ddfb9ff1272c0d6f6a91f3a6638e`.
+The independent deterministic test fixture remains
 `ccd343057636251f03de9a2986ec30d0ceadbe1aaa8bc70e8f3e301555021ffa`.
 
 Known boundary: this is deterministic historical event replay, not a

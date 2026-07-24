@@ -67,6 +67,13 @@ TEST_CASE("ITCH parser validates known definitions, policy, fields, and streamin
   CHECK(known_skipped.statistics.skipped_messages == 1);
   CHECK(known_skipped.statistics.skipped_by_type.at('Y') == 1);
   CHECK_FALSE(strict.parse(framed('Y', 19)));
+  for (const auto [type, length] :
+       {std::pair{'J', 35U}, std::pair{'h', 21U}, std::pair{'I', 50U}, std::pair{'N', 20U}}) {
+    const auto administrative = strict.parse(framed(type, length));
+    REQUIRE(administrative);
+    CHECK(administrative.statistics.skipped_by_type.at(type) == 1);
+    CHECK_FALSE(strict.parse(framed(type, length - 1)));
+  }
   CHECK_FALSE(strict.parse(framed('Z', 20)));
   aegisx::NasdaqItchParser permissive({aegisx::UnknownMessagePolicy::Permissive});
   const auto unknown = permissive.parse(framed('Z', 20));
@@ -279,6 +286,28 @@ TEST_CASE("adaptive execution can choose passive children in a wide displayed ma
   CHECK(adaptive.filled == parent.target_quantity);
   CHECK(adaptive.passive_ratio == 1.0);
   CHECK(adaptive.average_price == 99.0);
+}
+
+TEST_CASE("adaptive urgency can cancel passive exposure and replace it aggressively", "[execution]") {
+  const std::vector<Event> market{
+      event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      event(1, Add{1, Side::Buy, 100, 100, "AAPL", {}}),
+      event(1, Add{2, Side::Sell, 100, 102, "AAPL", {}}),
+      event(2, aegisx::System{'O'}),
+      event(8, Add{3, Side::Sell, 10, 103, "AAPL", {}}),
+  };
+  aegisx::ExecutionConfig config;
+  config.intervals = 1;
+  config.max_child_quantity = 10;
+  config.force_completion_at_end = false;
+  config.adaptive_cancel_replace_on_urgency = true;
+  const auto report = aegisx::ExecutionSimulator{}.run(market, {2, 1, "AAPL", Side::Buy, 10, 2, 10},
+                                                       aegisx::Strategy::Adaptive, config);
+  CHECK(report.filled == 10);
+  CHECK(report.unfilled == 0);
+  CHECK(report.cancel_count == 1);
+  CHECK(report.aggressive_ratio == 1.0);
+  CHECK(report.children.size() == 2);
 }
 
 TEST_CASE("passive queue flow is conserved across multiple simulated children", "[execution]") {

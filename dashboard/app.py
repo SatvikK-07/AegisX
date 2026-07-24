@@ -26,7 +26,7 @@ def display_metric(column, label: str, value: object) -> None:
 st.set_page_config(page_title="AegisX artifacts", layout="wide")
 st.title("AegisX — reproducible historical-run inspector")
 st.caption("This dashboard is read-only: it visualizes prepared artifacts and never connects to a venue or submits orders.")
-default_run = Path(__file__).parents[1] / "runs" / "demo"
+default_run = Path(__file__).parents[1] / "runs" / "real-bx-20190830-aapl"
 run = Path(st.sidebar.text_input("Prepared run directory", str(default_run))).expanduser()
 st.sidebar.caption("Create artifacts with `aegisx replay`, `aegisx simulate`, `aegisx risk-demo`, and `python/scripts/run_research.py`.")
 
@@ -35,6 +35,9 @@ if not run.exists():
     st.stop()
 
 metadata = load_json(run, "metadata.json")
+execution_context = load_json(run, "execution_context.json")
+data_provenance = load_json(run, "data_provenance.json")
+vwap_profile = load_json(run, "vwap_profile.json")
 research_metadata = load_json(run / "research", "research_metadata.json")
 snapshots = load_csv(run, "snapshots.csv")
 execution = load_csv(run, "execution_comparison.csv")
@@ -47,6 +50,9 @@ portfolio_stress = load_csv(run / "research", "portfolio_stress.csv")
 risk_summary = load_json(run / "research", "risk_summary.json")
 model_metrics = load_csv(run / "research", "model_metrics.csv")
 economic_metrics = load_csv(run / "research", "economic_metrics.csv")
+execution_size_sweep = load_csv(run / "execution_size_sweep", "size_sweep.csv")
+execution_size_summary = load_json(run / "execution_size_sweep", "summary.json")
+performance_summary = load_json(run / "performance", "summary.json")
 
 overview, book, microstructure, execution_tab, risk_tab, research, provenance = st.tabs(
     ["Overview", "Order book", "Microstructure", "Execution", "Risk", "Research", "Provenance"]
@@ -59,6 +65,37 @@ with overview:
     display_metric(second, "Best bid (ticks)", last.get("best_bid_price_ticks"))
     display_metric(third, "Best ask (ticks)", last.get("best_ask_price_ticks"))
     display_metric(fourth, "Active orders", last.get("active_orders"))
+    if data_provenance:
+        expected_checksum = data_provenance.get("segment_sha256")
+        replay_matches = not metadata or metadata.get("input_sha256") == expected_checksum
+        execution_matches = not execution_context or execution_context.get("input_sha256") == expected_checksum
+        st.success(
+            f"Real historical data: {data_provenance.get('venue', 'unknown venue')} · "
+            f"{data_provenance.get('session_date', 'unknown session')} · "
+            f"{data_provenance.get('symbol', 'unknown symbol')} · "
+            f"{data_provenance.get('coverage', 'unknown coverage')}"
+        )
+        if not replay_matches or not execution_matches:
+            st.error("Artifact input checksums do not match the attached real-data provenance.")
+    if performance_summary:
+        st.caption("Measured real-data performance")
+        performance_columns = st.columns(3)
+        display_metric(
+            performance_columns[0],
+            "Replay events/sec",
+            f"{float(performance_summary.get('median_replay_events_per_second', 0)) / 1_000_000:.3f}M",
+        )
+        risk_performance = performance_summary.get("risk", {})
+        display_metric(
+            performance_columns[1],
+            "Risk p99",
+            f"{float(risk_performance.get('p99_nanoseconds', 0)) / 1_000:.3f} μs",
+        )
+        display_metric(
+            performance_columns[2],
+            "Risk checks/sec",
+            f"{float(risk_performance.get('checks_per_second', 0)) / 1_000_000:.3f}M",
+        )
     st.caption("All values are sourced from local output files; unavailable metrics are shown as n/a.")
 
 with book:
@@ -110,6 +147,16 @@ with execution_tab:
     if not decisions.empty:
         st.caption("Adaptive decision trace")
         st.dataframe(decisions, use_container_width=True, hide_index=True)
+    if not execution_size_sweep.empty:
+        st.caption("Real-session execution size sensitivity")
+        st.dataframe(execution_size_sweep, use_container_width=True, hide_index=True)
+        st.line_chart(
+            execution_size_sweep.set_index("quantity")[
+                ["adaptive_savings_vs_twap_bps", "adaptive_passive_fill_ratio"]
+            ]
+        )
+    if execution_size_summary:
+        st.json(execution_size_summary)
 
 with risk_tab:
     if risk.empty:
@@ -138,6 +185,18 @@ with research:
         st.dataframe(economic_metrics, use_container_width=True, hide_index=True)
 
 with provenance:
+    if data_provenance:
+        st.caption("External real-data provenance")
+        st.json(data_provenance)
+    else:
+        st.warning("No external real-data provenance file was attached to this run.")
+    if execution_context:
+        st.caption("Execution experiment context")
+        st.json(execution_context)
+    if vwap_profile:
+        st.caption("Chronologically earlier real-session VWAP profile")
+        st.json(vwap_profile)
+    st.caption("Replay metadata")
     st.json(metadata or {"status": "metadata.json not found"})
     artifacts = sorted(path.relative_to(run).as_posix() for path in run.rglob("*") if path.is_file())
     st.caption("Files visible to this dashboard")

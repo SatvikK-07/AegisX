@@ -15,6 +15,33 @@ std::uint64_t hash_value(std::uint64_t hash, const std::uint64_t value) {
   return hash;
 }
 
+void write_type_counts(std::ostream& stream, const std::map<char, std::uint64_t>& counts) {
+  stream << '{';
+  bool first = true;
+  for (const auto& [type, count] : counts) {
+    if (!first) stream << ',';
+    stream << "\"" << type << "\":" << count;
+    first = false;
+  }
+  stream << '}';
+}
+
+void write_symbols(std::ostream& stream, const std::vector<std::string>& symbols) {
+  stream << '[';
+  for (std::size_t index = 0; index < symbols.size(); ++index) {
+    if (index > 0) stream << ',';
+    stream << "\"" << symbols[index] << "\"";
+  }
+  stream << ']';
+}
+
+void write_optional_timestamp(std::ostream& stream, const std::optional<Timestamp> timestamp) {
+  if (timestamp)
+    stream << *timestamp;
+  else
+    stream << "null";
+}
+
 struct Metrics {
   std::uint64_t adds{};
   std::uint64_t cancels{};
@@ -168,8 +195,14 @@ ReplayResult MarketReplayEngine::run_file(const std::filesystem::path& input, co
 }
 
 void MarketReplayEngine::write(const ReplayResult& result, const std::filesystem::path& out, const std::string& input,
-                               const std::string_view input_checksum) const {
+                               const std::string_view input_checksum, const std::string_view data_classification,
+                               const std::filesystem::path& provenance) const {
   std::filesystem::create_directories(out);
+  if (!provenance.empty()) {
+    if (!std::filesystem::is_regular_file(provenance)) throw std::runtime_error("data provenance file does not exist");
+    std::filesystem::copy_file(provenance, out / "data_provenance.json",
+                               std::filesystem::copy_options::overwrite_existing);
+  }
   std::ofstream csv(out / "snapshots.csv");
   if (!csv) throw std::runtime_error("could not open snapshots output");
   csv << "stock_locate,symbol,timestamp_ns,best_bid_price_ticks,best_ask_price_ticks,spread_ticks,mid_price_ticks,"
@@ -191,14 +224,29 @@ void MarketReplayEngine::write(const ReplayResult& result, const std::filesystem
   std::ofstream metadata(out / "metadata.json");
   if (!metadata) throw std::runtime_error("could not open replay metadata output");
   metadata << "{\n"
-           << "  \"schema_version\": 2,\n"
+           << "  \"schema_version\": 3,\n"
            << "  \"input_path\": \"" << input << "\",\n"
            << "  \"input_sha256\": \"" << input_checksum << "\",\n"
+           << "  \"data_classification\": \"" << data_classification << "\",\n"
+           << "  \"provenance_file\": " << (provenance.empty() ? "null" : "\"data_provenance.json\"") << ",\n"
            << "  \"price_scale\": " << kPriceScale << ",\n"
            << "  \"processed_events\": " << result.processed_events << ",\n"
            << "  \"framed_messages\": " << result.decoder_statistics.framed_messages << ",\n"
            << "  \"decoded_messages\": " << result.decoder_statistics.decoded_messages << ",\n"
            << "  \"skipped_messages\": " << result.decoder_statistics.skipped_messages << ",\n"
+           << "  \"unknown_messages\": " << result.decoder_statistics.unknown_messages << ",\n"
+           << "  \"bytes_processed\": " << result.decoder_statistics.bytes_processed << ",\n"
+           << "  \"first_timestamp_ns\": ";
+  write_optional_timestamp(metadata, result.decoder_statistics.first_timestamp);
+  metadata << ",\n  \"last_timestamp_ns\": ";
+  write_optional_timestamp(metadata, result.decoder_statistics.last_timestamp);
+  metadata << ",\n  \"decoded_by_type\": ";
+  write_type_counts(metadata, result.decoder_statistics.decoded_by_type);
+  metadata << ",\n  \"skipped_by_type\": ";
+  write_type_counts(metadata, result.decoder_statistics.skipped_by_type);
+  metadata << ",\n  \"symbols_discovered\": ";
+  write_symbols(metadata, result.decoder_statistics.symbols_discovered);
+  metadata << ",\n"
            << "  \"logical_output_checksum\": " << result.logical_checksum << ",\n"
            << "  \"full_state_checksum\": " << result.full_state_checksum << "\n"
            << "}\n";

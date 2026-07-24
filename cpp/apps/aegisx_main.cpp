@@ -5,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <vector>
 
 #include "aegisx/aegisx.h"
@@ -16,6 +17,13 @@ std::string option(const int argc, char** argv, const std::string_view name, con
     if (argv[index] == name) return argv[index + 1];
   }
   return std::string(fallback);
+}
+
+bool flag(const int argc, char** argv, const std::string_view name) {
+  for (int index = 2; index < argc; ++index) {
+    if (argv[index] == name) return true;
+  }
+  return false;
 }
 
 std::optional<aegisx::StockLocate> optional_stock_locate_option(const int argc, char** argv) {
@@ -43,6 +51,67 @@ std::optional<std::size_t> size_option(const int argc, char** argv, const std::s
   const auto parsed = std::stoull(value);
   if (parsed > std::numeric_limits<std::size_t>::max()) throw std::runtime_error("size option is out of range");
   return static_cast<std::size_t>(parsed);
+}
+
+double double_option(const int argc, char** argv, const std::string_view name, const double fallback) {
+  const std::string value = option(argc, argv, name);
+  return value.empty() ? fallback : std::stod(value);
+}
+
+aegisx::Quantity quantity_option(const int argc, char** argv, const std::string_view name,
+                                 const aegisx::Quantity fallback) {
+  const std::string value = option(argc, argv, name);
+  if (value.empty()) return fallback;
+  const auto parsed = std::stoull(value);
+  if (parsed > static_cast<unsigned long long>(std::numeric_limits<aegisx::Quantity>::max()))
+    throw std::runtime_error("quantity option is out of range");
+  return static_cast<aegisx::Quantity>(parsed);
+}
+
+aegisx::Side side_option(const int argc, char** argv) {
+  const std::string value = option(argc, argv, "--side", "buy");
+  if (value == "buy") return aegisx::Side::Buy;
+  if (value == "sell") return aegisx::Side::Sell;
+  throw std::runtime_error("--side must be buy or sell");
+}
+
+std::optional<aegisx::StockLocate> locate_for_symbol(const std::vector<aegisx::Event>& events,
+                                                     const std::string_view symbol) {
+  for (const auto& event : events) {
+    const auto* directory = std::get_if<aegisx::StockDirectory>(&event.payload);
+    if (directory != nullptr && directory->symbol == symbol) return event.stock_locate;
+  }
+  return std::nullopt;
+}
+
+aegisx::VolumeProfile load_volume_profile(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  if (!input) throw std::runtime_error("could not open VWAP profile");
+  aegisx::VolumeProfile profile;
+  std::string line;
+  while (std::getline(input, line)) {
+    const auto separator = line.find('=');
+    if (separator == std::string::npos) throw std::runtime_error("malformed VWAP profile line");
+    const std::string key = line.substr(0, separator);
+    const std::string value = line.substr(separator + 1);
+    if (key == "training_session") {
+      profile.training_session = value;
+    } else if (key == "evaluation_session") {
+      profile.evaluation_session = value;
+    } else if (key == "source_checksum") {
+      profile.source_checksum = value;
+    } else if (key == "weights") {
+      std::istringstream weights(value);
+      std::string weight;
+      while (std::getline(weights, weight, ',')) profile.interval_weights.push_back(std::stod(weight));
+    } else {
+      throw std::runtime_error("unknown VWAP profile key: " + key);
+    }
+  }
+  if (profile.training_session.empty() || profile.evaluation_session.empty() || profile.source_checksum.empty() ||
+      profile.interval_weights.empty())
+    throw std::runtime_error("VWAP profile is missing required fields");
+  return profile;
 }
 
 aegisx::ReplayConfig replay_config_from(const int argc, char** argv) {
@@ -275,8 +344,8 @@ void run_execution_benchmark(const std::filesystem::path& output) {
   std::ofstream metadata(output / "execution_benchmark.json");
   metadata << "{\n  \"scenarios\": " << scenarios.size() << ",\n  \"strategies\": 4"
            << ",\n  \"mean_adaptive_savings_bps\": " << mean_savings
-           << ",\n  \"standard_deviation_adaptive_savings_bps\": " << standard_deviation
-           << ",\n  \"synthetic\": true\n}\n";
+           << ",\n  \"standard_deviation_adaptive_savings_bps\": " << standard_deviation << ",\n  \"synthetic\": true"
+           << ",\n  \"evidence_classification\": \"deterministic_regression_only\"\n}\n";
 }
 
 void run_risk_benchmark(const std::filesystem::path& output, const std::size_t iterations) {
@@ -334,18 +403,23 @@ int main(const int argc, char** argv) {
           "DIR");
     }
     const std::string command = argv[1];
-    const std::filesystem::path input = option(argc, argv, "--input", "data/fixtures/aegisx_itch_sample.itch");
+    const std::filesystem::path input = option(argc, argv, "--input");
     const std::filesystem::path output =
         option(argc, argv, "--output", command == "replay" ? "runs/replay" : "runs/demo");
     const bool permissive = option(argc, argv, "--unknown-policy", "strict") == "permissive";
     aegisx::NasdaqItchParser parser(
         {permissive ? aegisx::UnknownMessagePolicy::Permissive : aegisx::UnknownMessagePolicy::Strict});
+    if ((command == "replay" || command == "simulate" || command == "benchmark") && input.empty())
+      throw std::runtime_error("--input is required; use scripts/run_real_pipeline.py for the real-data workflow");
 
     if (command == "replay") {
       const aegisx::ReplayConfig config = replay_config_from(argc, argv);
       aegisx::MarketReplayEngine replay;
       const auto result = replay.run_file(input, parser, config);
-      replay.write(result, output, input.string(), aegisx::sha256_file(input));
+      const std::filesystem::path provenance = option(argc, argv, "--provenance");
+      const std::string_view data_classification =
+          provenance.empty() ? "deterministic_fixture_or_unspecified" : "real_exchange_historical_sample";
+      replay.write(result, output, input.string(), aegisx::sha256_file(input), data_classification, provenance);
       std::cout << "AegisX replayed " << result.processed_events << " events; checksum " << result.logical_checksum
                 << '\n';
     } else if (command == "simulate") {
@@ -353,19 +427,105 @@ int main(const int argc, char** argv) {
       if (!parsed)
         throw std::runtime_error("parse error at byte " + std::to_string(parsed.error->offset) + ": " +
                                  parsed.error->message);
-      const auto locate = stock_locate_option(argc, argv);
       const std::string symbol = option(argc, argv, "--symbol", "AAPL");
-      aegisx::ParentOrder parent{1, locate, symbol, aegisx::Side::Buy, 20, 2, 20};
+      const auto locate =
+          optional_stock_locate_option(argc, argv)
+              .value_or(locate_for_symbol(parsed.events, symbol).value_or(stock_locate_option(argc, argv)));
+      constexpr aegisx::Timestamp kRegularSessionOpen = 34'200'000'000'000ULL;
+      constexpr aegisx::Timestamp kRegularSessionClose = 57'600'000'000'000ULL;
+      const bool historical_session =
+          parsed.statistics.last_timestamp && *parsed.statistics.last_timestamp > 1'000'000'000'000ULL;
+      const aegisx::Timestamp arrival =
+          timestamp_option(argc, argv, "--start-timestamp")
+              .value_or(historical_session ? kRegularSessionOpen : static_cast<aegisx::Timestamp>(2));
+      const aegisx::Timestamp end =
+          timestamp_option(argc, argv, "--end-timestamp")
+              .value_or(historical_session ? kRegularSessionClose : static_cast<aegisx::Timestamp>(20));
+      const aegisx::Quantity quantity = quantity_option(argc, argv, "--quantity", historical_session ? 1'000 : 20);
+      const std::size_t parent_count = size_option(argc, argv, "--parent-count").value_or(1);
+      if (parent_count == 0) throw std::runtime_error("--parent-count must be positive");
+      const aegisx::Timestamp parent_duration =
+          timestamp_option(argc, argv, "--parent-duration-ns").value_or(end - arrival);
+      if (parent_duration == 0 || parent_duration > end - arrival)
+        throw std::runtime_error("--parent-duration-ns must fit inside the requested session");
+      const bool alternate_sides = flag(argc, argv, "--alternate-sides");
+      const aegisx::Side requested_side = side_option(argc, argv);
       aegisx::ExecutionConfig execution_config;
-      execution_config.max_child_quantity = 10;
-      execution_config.vwap_weights = {0.1, 0.2, 0.3, 0.4};
+      const auto requested_intervals = size_option(argc, argv, "--intervals");
+      const std::filesystem::path vwap_profile_path = option(argc, argv, "--vwap-profile");
+      if (!vwap_profile_path.empty()) {
+        execution_config.vwap_profile = load_volume_profile(vwap_profile_path);
+        execution_config.intervals = execution_config.vwap_profile->interval_weights.size();
+        if (requested_intervals && *requested_intervals != execution_config.intervals)
+          throw std::runtime_error("--intervals does not match the supplied VWAP profile");
+      } else {
+        execution_config.intervals = requested_intervals.value_or(historical_session ? 13 : 4);
+        execution_config.vwap_weights.assign(execution_config.intervals,
+                                             1.0 / static_cast<double>(execution_config.intervals));
+      }
+      execution_config.max_child_quantity =
+          quantity_option(argc, argv, "--max-child-quantity", historical_session ? 100 : 10);
+      execution_config.pov_rate = double_option(argc, argv, "--pov-rate", 0.1);
+      execution_config.adaptive_cancel_replace_on_urgency = historical_session;
       aegisx::ExecutionSimulator simulator;
       std::vector<aegisx::ExecutionReport> reports;
-      for (const auto strategy :
-           {aegisx::Strategy::Twap, aegisx::Strategy::Vwap, aegisx::Strategy::Pov, aegisx::Strategy::Adaptive}) {
-        reports.push_back(simulator.run(parsed.events, parent, strategy, execution_config));
+      const aegisx::Timestamp parent_step =
+          parent_count == 1 ? 0 : (end - arrival - parent_duration) / static_cast<aegisx::Timestamp>(parent_count - 1);
+      for (std::size_t parent_index = 0; parent_index < parent_count; ++parent_index) {
+        const aegisx::Timestamp parent_arrival = arrival + parent_step * static_cast<aegisx::Timestamp>(parent_index);
+        const aegisx::Side parent_side =
+            alternate_sides && parent_index % 2 == 1
+                ? (requested_side == aegisx::Side::Buy ? aegisx::Side::Sell : aegisx::Side::Buy)
+                : requested_side;
+        const aegisx::ParentOrder parent{static_cast<aegisx::ParentOrderId>(parent_index + 1),
+                                         locate,
+                                         symbol,
+                                         parent_side,
+                                         quantity,
+                                         parent_arrival,
+                                         parent_arrival + parent_duration};
+        for (const auto strategy :
+             {aegisx::Strategy::Twap, aegisx::Strategy::Vwap, aegisx::Strategy::Pov, aegisx::Strategy::Adaptive}) {
+          reports.push_back(simulator.run(parsed.events, parent, strategy, execution_config));
+        }
       }
       simulator.write(reports, output);
+      const std::filesystem::path provenance = option(argc, argv, "--provenance");
+      if (!provenance.empty()) {
+        if (!std::filesystem::is_regular_file(provenance))
+          throw std::runtime_error("data provenance file does not exist");
+        std::filesystem::copy_file(provenance, output / "data_provenance.json",
+                                   std::filesystem::copy_options::overwrite_existing);
+      }
+      if (!vwap_profile_path.empty()) {
+        std::filesystem::copy_file(vwap_profile_path, output / "vwap_profile.txt",
+                                   std::filesystem::copy_options::overwrite_existing);
+        const std::filesystem::path audit = vwap_profile_path.string() + ".json";
+        if (std::filesystem::is_regular_file(audit))
+          std::filesystem::copy_file(audit, output / "vwap_profile.json",
+                                     std::filesystem::copy_options::overwrite_existing);
+      }
+      std::ofstream context(output / "execution_context.json");
+      if (!context) throw std::runtime_error("could not open execution context output");
+      context << "{\n"
+              << "  \"input_path\": \"" << input.string() << "\",\n"
+              << "  \"input_sha256\": \"" << aegisx::sha256_file(input) << "\",\n"
+              << "  \"data_classification\": \""
+              << (provenance.empty() ? "deterministic_fixture_or_unspecified" : "real_exchange_historical_sample")
+              << "\",\n"
+              << "  \"symbol\": \"" << symbol << "\",\n"
+              << "  \"stock_locate\": " << locate << ",\n"
+              << "  \"side\": \"" << aegisx::to_string(requested_side) << "\",\n"
+              << "  \"alternate_sides\": " << (alternate_sides ? "true" : "false") << ",\n"
+              << "  \"quantity_per_parent\": " << quantity << ",\n"
+              << "  \"parent_count\": " << parent_count << ",\n"
+              << "  \"parent_duration_ns\": " << parent_duration << ",\n"
+              << "  \"arrival_timestamp_ns\": " << arrival << ",\n"
+              << "  \"end_timestamp_ns\": " << end << ",\n"
+              << "  \"intervals\": " << execution_config.intervals << ",\n"
+              << "  \"vwap_profile\": \""
+              << (vwap_profile_path.empty() ? "uniform_baseline_no_prior_session" : "earlier_real_session") << "\"\n"
+              << "}\n";
       std::cout << "AegisX simulated " << reports.size() << " strategies\n";
     } else if (command == "risk-demo") {
       std::filesystem::create_directories(output);
@@ -376,7 +536,7 @@ int main(const int argc, char** argv) {
       std::cout << "AegisX wrote benchmark report\n";
     } else if (command == "execution-benchmark") {
       run_execution_benchmark(output);
-      std::cout << "AegisX wrote synthetic execution benchmark\n";
+      std::cout << "AegisX wrote deterministic fixture benchmark; it is not real-market evidence\n";
     } else if (command == "risk-benchmark") {
       run_risk_benchmark(output, size_option(argc, argv, "--iterations").value_or(1'000'000));
       std::cout << "AegisX wrote risk benchmark\n";

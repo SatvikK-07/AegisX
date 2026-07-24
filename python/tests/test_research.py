@@ -1,3 +1,5 @@
+import gzip
+import json
 import numpy as np
 import pandas as pd
 import pytest
@@ -6,6 +8,7 @@ from pathlib import Path
 from aegisx_research.config import load_config
 from aegisx_research.experiments import assert_no_leakage, chronological_split, economic_evaluation, run_fill_experiments
 from aegisx_research.features import FEATURE_COLUMNS, build_passive_fill_dataset
+from aegisx_research.itch_data import prepare_symbol_segment, read_frame, write_provenance
 from aegisx_research.risk import (
     component_risk_contributions,
     drawdown_series,
@@ -37,6 +40,33 @@ def artifacts():
         if index % 2:
             fill_rows.append({"strategy": "adaptive", "child_id": index, "quantity": 10, "liquidity_role": "maker"})
     return snapshots, pd.DataFrame(child_rows), pd.DataFrame(fill_rows)
+
+
+def test_real_itch_preparation_tracks_provenance_and_extracts_symbol(tmp_path):
+    fixture = Path(__file__).parents[2] / "data" / "fixtures" / "aegisx_itch_sample.itch"
+    archive = tmp_path / "official.itch.gz"
+    archive.write_bytes(gzip.compress(fixture.read_bytes()))
+    segment = tmp_path / "AAPL.itch"
+    result = prepare_symbol_segment(
+        archive,
+        segment,
+        symbol="AAPL",
+        session_date="2019-07-30",
+        venue="Nasdaq BX",
+        source_url="https://example.test/official.itch.gz",
+        official_archive_expected_bytes=archive.stat().st_size,
+    )
+    assert result.data_classification == "real_exchange_historical_sample"
+    assert result.source_archive_complete
+    assert result.coverage == "complete_session"
+    assert result.frames_scanned == 11
+    assert result.frames_emitted == 11
+    assert result.segment_sha256
+    provenance = tmp_path / "provenance.json"
+    write_provenance(result, provenance)
+    assert json.loads(provenance.read_text())["symbol"] == "AAPL"
+    with segment.open("rb") as stream:
+        assert read_frame(stream) is not None
 
 
 def test_simulator_labelled_dataset_and_chronological_models():
@@ -118,5 +148,5 @@ def test_adverse_selection_sign_is_positive_when_post_fill_move_is_worse():
 
 def test_committed_configs_are_versioned_and_valid():
     root = Path(__file__).resolve().parents[2]
-    for kind in ("replay", "execution", "risk", "research", "dashboard"):
+    for kind in ("replay", "execution", "risk", "research", "dashboard", "real_data"):
         assert load_config(root / "configs" / f"{kind}.json", kind)["kind"] == kind

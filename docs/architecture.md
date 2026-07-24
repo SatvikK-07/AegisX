@@ -2,24 +2,39 @@
 
 ```mermaid
 flowchart LR
-  Feed[ITCH bytes] --> Parser[Bounds-checked parser]
-  Parser --> Replay[Streaming replay]
-  Replay --> State[MarketState]
-  State --> Books[Per-instrument FIFO books]
-  Parser --> Execution[Historical + visible execution state]
-  Execution --> Risk[Risk approvals and reservations]
-  State --> Artifacts[CSV and JSON artifacts]
+  Nasdaq["Official Nasdaq EMI archives"] --> Acquire["Range downloader + gzip integrity"]
+  Acquire --> Provenance["URL, size, date, SHA-256, frame counts"]
+  Acquire --> Extract["Streaming symbol extractor"]
+  Extract --> Parser["Bounds-checked ITCH parser"]
+  Parser --> Replay["Streaming replay"]
+  Replay --> State["MarketState"]
+  State --> Books["Per-instrument FIFO books"]
+  Parser --> Execution["Historical + latency-visible execution state"]
+  Execution --> Risk["Risk approvals and reservations"]
+  State --> Artifacts["CSV and JSON artifacts"]
   Execution --> Artifacts
-  Risk[RiskEngine] --> Artifacts
-  Artifacts --> Research[Python and Parquet]
-  Artifacts --> Dashboard[Read-only dashboard]
+  Risk --> Artifacts
+  Provenance --> Artifacts
+  Artifacts --> Research["Python, Parquet, purged chronology"]
+  Artifacts --> Dashboard["Read-only dashboard"]
 ```
 
-`NasdaqItchParser` owns structural framing, exact known-type validation, strict/permissive unknown handling, statistics, and callback delivery. `MarketState` routes every active order ID globally to exactly one stock locate; an `OrderBook` owns price levels, FIFO queues, and iterator locators. Mutations validate all preconditions before they change state.
+`download_real_itch.py` is the only component that contacts an external host.
+The C++ engine itself opens local BinaryFILE inputs only. Raw archives,
+extracted segments, and generated runs remain outside source control.
 
-Replay consumes parser callbacks and does not retain the full file. Every
-execution strategy rebuilds fresh historical and latency-delayed visible state,
-so no strategy can mutate another. Aggressive simulated consumption is kept in
-a third shadow ledger. Generated CSV, JSON, and Parquet artifacts are the only
-interface to the read-only dashboard and research code. No component opens a
-network connection or submits an order.
+`NasdaqItchParser` owns framing, exact known-type validation,
+strict/permissive unknown handling, statistics, and callback delivery.
+`MarketState` routes each active order ID to one stock locate. An `OrderBook`
+owns price levels, FIFO queues, and iterator locators; mutations validate
+preconditions before changing state.
+
+Replay consumes parser callbacks without retaining the full input. Each
+execution policy rebuilds independent historical and latency-delayed visible
+state. Simulated aggressive consumption lives in a separate shadow ledger so
+one displayed unit cannot fill multiple children. Parent, child, queue, fill,
+risk, and decision ledgers become immutable artifacts consumed by research and
+the dashboard.
+
+The provenance checksum is repeated in replay metadata, execution context, and
+research metadata. The real-data research runner refuses mismatched artifacts.

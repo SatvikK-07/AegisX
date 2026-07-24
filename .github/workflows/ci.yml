@@ -71,4 +71,4 @@ jobs:
       - name: Test research and portfolio analytics
         run: python -m pytest python/tests -q
       - name: Dashboard syntax smoke test
-        run: python -m compileall -q dashboard python/aegisx_research python/scripts
+        run: python -m compileall -q dashboard python/aegisx_research python/scripts scripts

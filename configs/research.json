@@ -3,6 +3,8 @@
   "kind": "research",
   "horizon_rows": 1,
   "embargo_rows": 1,
+  "minimum_rows": 100,
+  "minimum_partition_rows": 20,
   "features": [
     "spread_ticks",
     "bid_depth",

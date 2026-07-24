@@ -84,17 +84,21 @@ def build_passive_fill_dataset(
     ).replace(0, np.nan)
     if snapshot_instrument_columns:
         groups = books.groupby(snapshot_instrument_columns, sort=False)
-        books["mid_return_lag1"] = groups["mid_price_ticks"].pct_change().replace([np.inf, -np.inf], np.nan)
+        books["mid_return_lag1"] = groups["mid_price_ticks"].pct_change(fill_method=None).replace(
+            [np.inf, -np.inf], np.nan
+        )
         future_mid = groups["mid_price_ticks"].shift(-horizon_rows)
         future_timestamp = groups["timestamp_ns"].shift(-horizon_rows)
-        books["rolling_mid_volatility"] = groups["mid_price_ticks"].pct_change().groupby(
+        books["rolling_mid_volatility"] = groups["mid_price_ticks"].pct_change(fill_method=None).groupby(
             [books[column] for column in snapshot_instrument_columns], sort=False
         ).transform(lambda values: values.rolling(10, min_periods=2).std())
         books["trade_intensity"] = groups["executions"].transform(
             lambda values: values.rolling(10, min_periods=1).sum()
         )
     else:
-        books["mid_return_lag1"] = books["mid_price_ticks"].pct_change().replace([np.inf, -np.inf], np.nan)
+        books["mid_return_lag1"] = books["mid_price_ticks"].pct_change(fill_method=None).replace(
+            [np.inf, -np.inf], np.nan
+        )
         future_mid = books["mid_price_ticks"].shift(-horizon_rows)
         future_timestamp = books["timestamp_ns"].shift(-horizon_rows)
         books["rolling_mid_volatility"] = books["mid_return_lag1"].rolling(10, min_periods=2).std()

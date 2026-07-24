@@ -8,7 +8,7 @@
 namespace aegisx {
 namespace {
 
-constexpr std::array<ItchMessageDefinition, 18> kDefinitions{{
+constexpr std::array<ItchMessageDefinition, 22> kDefinitions{{
     {'S', 12, true, "System Event"},
     {'R', 39, true, "Stock Directory"},
     {'H', 25, true, "Stock Trading Action"},
@@ -17,6 +17,8 @@ constexpr std::array<ItchMessageDefinition, 18> kDefinitions{{
     {'V', 35, false, "MWCB Decline Level"},
     {'W', 12, false, "MWCB Status"},
     {'K', 28, false, "IPO Quoting Period Update"},
+    {'J', 35, false, "LULD Auction Collar"},
+    {'h', 21, false, "Operational Halt"},
     {'A', 36, true, "Add Order"},
     {'F', 40, true, "Add Order with MPID Attribution"},
     {'E', 31, true, "Order Executed"},
@@ -27,6 +29,8 @@ constexpr std::array<ItchMessageDefinition, 18> kDefinitions{{
     {'P', 44, true, "Trade"},
     {'Q', 40, true, "Cross Trade"},
     {'B', 19, true, "Broken Trade"},
+    {'I', 50, false, "Net Order Imbalance Indicator"},
+    {'N', 20, false, "Retail Price Improvement Indicator"},
 }};
 
 class Reader {

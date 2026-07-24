@@ -1,51 +1,49 @@
-# Final upgrade requirement audit
+# Final requirement audit
 
-Status values are **pass**, **partial**, or **not claimed**. A partial item is
-kept visible instead of being relabelled as complete.
+Status values are **pass**, **partial**, and **not claimed**. Partial and
+negative results remain visible.
 
 | Area | Status | Evidence |
 |---|---|---|
-| Offline C++20 build, strict warnings | pass | CMake and CI matrix |
-| Reference ITCH fixture and checksum | pass | fixture CTest and `itch_validation.md` |
-| Multi-instrument FIFO replay | pass | deterministic and randomized native tests |
-| Parent-order conservation | pass | explicit state invariant plus transition/terminal tests |
-| Immutable arrival benchmark | pass | arrival/latency native test |
-| Historical/visible/shadow state separation | pass | execution implementation and shadow tests |
-| Aggressive depth walk, limits, no double consumption | pass | level walk and shadow accounting |
+| Official external ITCH data | pass | two complete Nasdaq-hosted BX archives, URLs, sizes, gzip integrity, SHA-256 |
+| Chronologically separate profile/evaluation sessions | pass | July training and August evaluation |
+| Strict real-feed decoder validation | pass | 62.7M frames scanned; zero unknown types in both AAPL streams |
+| Multi-instrument FIFO engine | pass | native deterministic/randomized tests; real canonical run is AAPL-only |
+| Full ITCH 5.0 semantic coverage | partial | all observed types are length-validated; selected administrative types are intentionally skipped |
+| Parent-order conservation | pass | explicit invariant on submission/fill/cancel/terminal transitions |
+| Historical/visible/shadow state separation | pass | implementation and regression tests |
+| Aggressive depth walk/no double consumption | pass | level walk and shadow accounting |
 | Passive FIFO queue model | pass | shared-flow conservation and queue-history tests |
-| Passive repricing policy | partial | action type exists; no automatic reprice loop is claimed |
-| Market-data/decision/transmission/ack latency | pass | explicit timestamps and delayed visible replay |
-| Per-share and bps maker/taker fees | pass | fill-level fee accounting |
-| Distinct TWAP/VWAP/POV/adaptive policies | pass | separate schedule/volume/decision paths |
-| Full execution cost report | pass | shortfall ticks/bps/currency, market VWAP, spread, opportunity, adverse selection, impact proxy, fees, schedule deviation |
-| Position, P&L, reservations, limits | pass | risk unit tests and audit demo |
-| Parent and open-order limits | pass | execution integration and risk checks |
-| Gross/net/concentration including reservations | pass | risk regression test |
-| Kill-switch lifecycle/audit log | pass | risk audit artifact |
-| Historical/parametric VaR, ES, component and liquidity risk | pass | Python risk helpers/tests |
-| Named portfolio stress scenarios | pass | Python stress report/tests |
-| Leakage-safe research pipeline | pass | purged split, feature guard, model/economic tests |
-| Credible real-feed ML score | not claimed | bundled fixtures are intentionally insufficient |
-| Six execution regimes/four strategies | pass | execution benchmark artifact |
-| One-million-check risk benchmark | pass | `PERFORMANCE.md` |
-| Read-only dashboard | pass | execution trace, risk audit/stress, research/provenance tabs |
-| GCC/Clang, sanitizer, format, tidy, Python CI | pass when hosted run is green | `.github/workflows/ci.yml` |
-| Live venue connectivity, persistence, HA | not claimed | explicitly outside research-platform scope |
+| Passive urgency cancel/replace | pass | opt-in real-run policy and native test |
+| General dynamic repricing | partial | no venue-calibrated continuous reprice model |
+| Four execution policies | pass | TWAP, earlier-session-profile VWAP, instrument POV, adaptive |
+| Full execution cost report | pass | shortfall, VWAP, spread, opportunity, adverse selection, impact proxy, fees, schedule |
+| Real execution experiment | pass | five 100%-completed August size comparisons |
+| Market-regime generalization | not claimed | one venue/symbol/session/side cannot establish regime robustness |
+| Position/P&L/reservation limits | pass | native tests and audit artifact |
+| Gross/net/concentration/open-order limits | pass | projected exposure includes reservations |
+| Kill-switch lifecycle/audit | pass | risk artifacts and tests |
+| VaR/ES/component/liquidity/stress analytics | pass | Python helpers and tests |
+| Leakage-safe real-data research | pass | checksum gates, purged chronology, sample/class minimums |
+| Predictive ML edge | not claimed | real test metrics do not beat baselines convincingly |
+| Read-only dashboard | pass | provenance, replay, execution, risk, research, performance |
+| GCC/Clang/sanitizer/format/tidy/Python CI | pass when current hosted run is green | `ci.yml` |
+| Full real-data hosted validation | manual | `real-data-validation.yml`; raw archives are not committed |
+| Live connectivity, persistence, HA | not claimed | research-platform scope |
 
-## Correctness audit
+## Correctness invariants
 
-- Quantity conservation is asserted after submissions, fills, cancellations,
-  risk rejections, and terminal cleanup.
-- Passive external flow is a shared quantity consumed once in own-order FIFO.
-- Reservations enter projected position, gross/net exposure, open exposure, and
-  order count and are released only on fill completion or effective cancel.
-- Same-price historical adds restore shadow liquidity; a market walk cannot
-  consume one displayed unit twice.
-- Buy adverse selection is positive when the future midpoint rises; sell
+- Target quantity equals filled plus open plus remaining-unsubmitted plus
+  terminal-unfilled quantity.
+- Passive external flow is consumed once across own children in FIFO order.
+- Same-price historical adds reconcile shadow liquidity; displayed units cannot
+  be consumed twice.
+- Risk reservations enter projected position, gross/net/symbol/open exposure,
+  and order counts.
+- Replay, execution, research, and provenance checksums must identify the same
+  real input segment.
+- Buy adverse selection is positive when the post-fill midpoint rises; sell
   adverse selection is positive when it falls.
 
-## Simplicity audit
-
-The upgrade adds no broker, exchange adapter, container, message bus, database,
-or distributed service. Configuration remains versioned JSON and all generated
-run data remains outside source control.
+Synthetic fixtures remain only for deterministic unit/CI checks and are not
+used as external-market evidence.

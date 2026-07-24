@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "kind": "dashboard",
-  "default_run": "runs/demo",
+  "default_run": "runs/real-bx-20190830-aapl",
   "read_only": true
 }

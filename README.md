@@ -1,70 +1,112 @@
 # AegisX
 
-AegisX is a deterministic C++20 market-microstructure research platform for replaying a documented Nasdaq TotalView-ITCH 5.0 message subset, rebuilding per-instrument FIFO books, evaluating transparent execution policies, and testing pre-trade risk decisions. It is not connected to an exchange or broker, does not transmit orders, and makes no performance or profitability claim.
+AegisX is a C++20 and Python market-microstructure research platform that
+downloads official historical Nasdaq TotalView-ITCH 5.0 samples, validates
+their provenance, reconstructs FIFO limit-order books, and evaluates
+queue-aware execution and pre-trade risk controls. Synthetic messages remain
+only as small deterministic unit-test fixtures.
 
-## Build and validate
+AegisX is not connected to an exchange or broker and never transmits orders.
+Execution results are historical-replay simulations, not live fills or
+profitability claims.
 
-The Catch2 test framework is vendored in `third_party/Catch2`; configuration does not download dependencies.
+## Real-data workflow
+
+The canonical experiment uses complete Nasdaq BX sessions from July 30 and
+August 30, 2019. July trains the VWAP volume profile; August is held later in
+time for replay and evaluation. Both archives are downloaded directly from the
+[official Nasdaq EMI archive](https://emi.nasdaq.com/ITCH/Nasdaq%20BX%20ITCH/).
+
+```bash
+cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
+cmake --build build/release --parallel
+python -m pip install ./python
+python scripts/run_real_pipeline.py
+```
+
+The first run downloads approximately 841 MB of compressed source data. Raw and
+derived market data are deliberately ignored by Git. If both archives already
+exist at their configured sizes, use:
+
+```bash
+python scripts/run_real_pipeline.py --skip-download
+```
+
+The pipeline:
+
+1. downloads both official archives with resumable verified byte ranges;
+2. validates complete gzip streams and computes SHA-256 checksums;
+3. scans every framed exchange message and extracts provenance-tracked AAPL
+   streams;
+4. builds a July volume profile without using August observations;
+5. runs strict replay, execution, risk, performance, and research experiments;
+6. refuses research output unless provenance checksums match and minimum
+   chronological sample/class gates pass.
+
+See [real-data provenance](docs/real_data.md) for source URLs and checksums.
+
+## Measured local evidence
+
+Release measurements on the documented Apple M3 environment:
+
+- official messages scanned: **62,701,676** across two complete sessions;
+- August AAPL stream: **319,100 framed / 314,151 decoded messages**, with zero
+  unknown message types;
+- median real-data parser throughput: **9.032M messages/second**;
+- median real-data replay throughput: **1.827M events/second**;
+- adaptive execution: **25.039 bps average simulated savings versus TWAP**
+  across five fully completed AAPL buy-size tests from 100 to 1,000 shares in
+  the August session;
+- risk: **0.084 μs p99 approval latency** and **8.882M approval/release
+  checks/second** over one million iterations.
+
+The five execution observations are a size-sensitivity experiment on one
+venue, symbol, side, and day. They are not evidence of expected savings in
+other markets. The real passive-fill research set contains 153 observations;
+its models do not beat the baselines convincingly, so no predictive-edge claim
+is made.
+
+## Build and test
 
 ```bash
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release --parallel
 ctest --test-dir build/release --output-on-failure
+PYTHONPATH=python python -m pytest -q
 ```
 
-The project treats warnings as errors for AegisX targets with `-Wall`, `-Wextra`, `-Wpedantic`, `-Wconversion`, and `-Wshadow`. The CI workflow defines GCC and Clang Debug/Release jobs, a GCC ASan/UBSan job, formatting, clang-tidy, Python tests, and a dashboard syntax smoke test.
+Catch2 is vendored, and CMake configuration is offline. Production targets use
+warnings as errors. Normal CI runs GCC and Clang Debug/Release, ASan/UBSan,
+formatting, clang-tidy, Python tests, and dashboard compilation. The separate
+manual real-data workflow downloads both full sessions and uploads only
+derived evidence—not raw exchange archives.
 
-## Reproducible local run
+## Dashboard
 
 ```bash
-./build/release/aegisx replay --input data/fixtures/itch_reference_segment.itch --output runs/demo --snapshot-every-events 1
-./build/release/aegisx simulate --input data/fixtures/aegisx_itch_sample.itch --output runs/demo
-./build/release/aegisx risk-demo --output runs/demo
-./build/release/aegisx benchmark --input data/fixtures/itch_reference_segment.itch --output runs/demo
 PYTHONPATH=python streamlit run dashboard/app.py
 ```
 
-Replay accepts `--stock-locate`, `--symbol`, timestamp/event-range filters, `--snapshot-every-events`, `--snapshot-every-ns`, and `--top-levels`. Metadata records the source path, SHA-256, scale, decode counts, and logical and full-state checksums. `runs/` contains generated artifacts and is intentionally ignored.
+The default run is `runs/real-bx-20190830-aapl`. The dashboard displays
+external-source provenance, checksum consistency, replay state, execution
+size sensitivity, risk evidence, research metrics, and benchmark results.
 
-For a sufficiently long run with both filled and unfilled passive simulator children, create a research artifact with:
+## Deterministic fixtures
 
-```bash
-PYTHONPATH=python python python/scripts/run_research.py --run runs/demo
-```
-
-The bundled fixtures are intentionally too short to support a credible fitted model; the command correctly stops rather than manufacturing model metrics when there are not two observed passive-fill classes.
-
-## Reproducible synthetic benchmarks
-
-```bash
-python scripts/generate_benchmark_fixture.py --pairs 500000 --output /private/tmp/aegisx-million.itch
-./build/release/aegisx benchmark --input /private/tmp/aegisx-million.itch --output /private/tmp/throughput
-./build/release/aegisx execution-benchmark --output /private/tmp/execution
-./build/release/aegisx risk-benchmark --iterations 1000000 --output /private/tmp/risk
-```
-
-On an Apple M3 with AppleClang 17 Release, the three-run medians were **10.280M
-synthetic parser events/sec** and **6.989M synthetic replay events/sec**. The
-pre-trade benchmark recorded **0.125 μs p99 approval latency** and **7.760M
-approval/release checks/sec** over 1,000,000 checks. Adaptive execution saved
-**89.3276 bps on average versus TWAP across six deterministic synthetic
-regimes** (113.316 bps standard deviation). These are local synthetic
-benchmarks, not external-feed, live-trading, profitability, or
-production-latency claims. See [performance methodology](docs/PERFORMANCE.md).
+`data/fixtures/` remains committed for fast edge-case and CI tests. These files
+are generated and must never be presented as market evidence.
 
 ## Documentation
 
+- [Real data and provenance](docs/real_data.md)
 - [Architecture](docs/architecture.md)
-- [Replay model](docs/replay_model.md)
 - [ITCH validation](docs/itch_validation.md)
-- [Order-book validation](docs/order_book_validation.md)
+- [Replay model](docs/replay_model.md)
 - [Execution model](docs/execution_model.md)
 - [Risk model](docs/risk_model.md)
 - [Research methodology](docs/research_methodology.md)
-- [Benchmark report](docs/benchmark_report.md)
+- [Performance methodology](docs/PERFORMANCE.md)
 - [Experiment results](docs/experiment_results.md)
-- [Final requirement audit](docs/requirements_audit.md)
-- [Portfolio and interview content](docs/portfolio_content.md)
-- [Assumptions](docs/assumptions.md), [limitations](docs/limitations.md), and [demo script](docs/demo_script.md)
-
-The small committed fixtures are synthetic and specification-derived. They are not exchange data and must not be treated as evidence of production latency, fill quality, capacity, or model performance.
+- [Requirement audit](docs/requirements_audit.md)
+- [Limitations](docs/limitations.md)
+- [Portfolio content](docs/portfolio_content.md)

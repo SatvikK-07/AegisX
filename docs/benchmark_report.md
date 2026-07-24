@@ -1,17 +1,15 @@
 # Benchmark report
 
-The final local benchmark evidence, input checksum, individual runs, timing
-boundaries, compiler, machine, and limitations are recorded in
-[`PERFORMANCE.md`](PERFORMANCE.md).
+The canonical real-data results are:
 
-Headline results from the 2026-07-24 Apple M3 / AppleClang 17 Release run:
+- parser: **9.032M official ITCH messages/second median**;
+- replay: **1.827M decoded events/second median**;
+- execution: **25.039 bps mean adaptive-vs-TWAP simulated savings** across
+  five fully completed AAPL size tests in the held-later August session;
+- risk approval: **0.084 μs p99** over one million checks;
+- risk approval plus reservation release: **8.882M checks/second**.
 
-- parser: **10.280M synthetic events/second median**;
-- replay: **6.989M synthetic events/second median**;
-- execution: **89.3276 bps mean adaptive-vs-TWAP savings** across six
-  deterministic synthetic regimes, 113.316 bps standard deviation;
-- risk approval: **0.125 μs p99** over one million checks;
-- risk end-to-end approval plus reservation release: **7.760M checks/second**.
-
-These are synthetic local measurements, not external-feed, live execution,
-profitability, production-capacity, or SLO claims.
+Input checksums, timing boundaries, individual trials, machine details, and
+scope limits are recorded in [`PERFORMANCE.md`](PERFORMANCE.md). These are
+historical-replay and local-compute measurements, not live execution or
+production-capacity claims.

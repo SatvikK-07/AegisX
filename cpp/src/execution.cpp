@@ -121,8 +121,10 @@ ExecutionReport ExecutionSimulator::run(const std::vector<Event>& events, const 
   MarketState visible;
   ExecutionReport report;
   report.strategy = strategy;
+  report.parent_order_id = parent.id;
   report.stock_locate = parent.stock_locate;
   report.symbol = parent.symbol;
+  report.side = parent.side;
   report.unfilled = parent.target_quantity;
   report.parent_state.target = parent.target_quantity;
   report.parent_state.remaining_unsubmitted = parent.target_quantity;
@@ -345,9 +347,11 @@ ExecutionReport ExecutionSimulator::run(const std::vector<Event>& events, const 
          decision_book->best_ask(), book_imbalance(*decision_book), reason});
     reconcile_parent();
   };
-  const auto cancel_open_children = [&](const Timestamp timestamp, const std::string& reason) {
+  const auto cancel_open_children = [&](const Timestamp timestamp, const std::string& reason,
+                                        const bool passive_only = false) {
     for (auto& child : report.children) {
       if (child.state != ChildOrderState::Pending && child.state != ChildOrderState::Open) continue;
+      if (passive_only && child.type != OrderType::Limit) continue;
       const Quantity remaining = child.remaining_quantity;
       child.state = ChildOrderState::Cancelled;
       child.cancellation_time = timestamp;
@@ -476,6 +480,10 @@ ExecutionReport ExecutionSimulator::run(const std::vector<Event>& events, const 
     if (event.stock_locate != parent.stock_locate) continue;
     const auto* decision_book = visible.book_for(parent.stock_locate);
     if (decision_book == nullptr) continue;
+    const bool adaptive_urgent = strategy == Strategy::Adaptive &&
+                                 parent.end_time - event.timestamp_ns <= (parent.end_time - parent.arrival_time) / 4U;
+    if (adaptive_urgent && config.adaptive_cancel_replace_on_urgency)
+      cancel_open_children(event.timestamp_ns, "adaptive_urgency_cancel_replace", true);
 
     Quantity desired = 0;
     if (strategy == Strategy::Pov) {
@@ -517,13 +525,13 @@ ExecutionReport ExecutionSimulator::run(const std::vector<Event>& events, const 
     if (strategy == Strategy::Adaptive) {
       const Quantity expected = scheduled_target(event.timestamp_ns);
       const bool materially_behind = report.filled + total_open() + config.max_child_quantity < expected;
-      const bool urgent = parent.end_time - event.timestamp_ns <= (parent.end_time - parent.arrival_time) / 4U;
       const auto bid = decision_book->best_bid();
       const auto ask = decision_book->best_ask();
       const bool wide_spread = bid && ask && *ask - *bid > 1;
       const auto imbalance = book_imbalance(*decision_book);
       const bool favorable_queue = !imbalance || (parent.side == Side::Buy ? *imbalance >= -0.5 : *imbalance <= 0.5);
-      type = !materially_behind && !urgent && wide_spread && favorable_queue ? OrderType::Limit : OrderType::Market;
+      type = !materially_behind && !adaptive_urgent && wide_spread && favorable_queue ? OrderType::Limit
+                                                                                      : OrderType::Market;
       reason = type == OrderType::Limit ? "adaptive_passive:wide_spread_favorable_queue"
                                         : "adaptive_aggressive:urgency_or_schedule_deficit";
     }
@@ -615,15 +623,17 @@ void ExecutionSimulator::write(const std::vector<ExecutionReport>& reports, cons
   std::filesystem::create_directories(out);
   std::ofstream csv(out / "execution_comparison.csv");
   if (!csv) throw std::runtime_error("could not open execution output");
-  csv << "strategy,filled_quantity,unfilled_quantity,fill_rate,average_execution_price_ticks,"
+  csv << "strategy,parent_order_id,stock_locate,symbol,side,filled_quantity,unfilled_quantity,fill_rate,"
+         "average_execution_price_ticks,"
          "implementation_shortfall_ticks,implementation_shortfall_bps,implementation_shortfall_currency_ticks,"
          "market_vwap_ticks,spread_cost_ticks,impact_proxy_ticks,gross_execution_cost_ticks,"
          "net_execution_cost_ticks,fees_ticks,fees_paid_ticks,rebates_ticks,"
          "opportunity_cost_ticks,passive_fill_ratio,aggressive_fill_ratio,child_order_count,cancel_count,"
          "rejected_child_count,depth_consumed,maximum_schedule_deviation,completion_time_ns\n";
   for (const auto& report : reports) {
-    csv << to_string(report.strategy) << ',' << report.filled << ',' << report.unfilled << ',' << report.fill_rate
-        << ',' << (report.average_price ? std::to_string(*report.average_price) : "") << ','
+    csv << to_string(report.strategy) << ',' << report.parent_order_id << ',' << report.stock_locate << ','
+        << report.symbol << ',' << to_string(report.side) << ',' << report.filled << ',' << report.unfilled << ','
+        << report.fill_rate << ',' << (report.average_price ? std::to_string(*report.average_price) : "") << ','
         << (report.implementation_shortfall_ticks ? std::to_string(*report.implementation_shortfall_ticks) : "") << ','
         << (report.implementation_shortfall_bps ? std::to_string(*report.implementation_shortfall_bps) : "") << ','
         << (report.implementation_shortfall_currency ? std::to_string(*report.implementation_shortfall_currency) : "")

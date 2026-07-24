@@ -1,19 +1,42 @@
 # Limitations
 
-AegisX supports a selected ITCH 5.0 subset and skips several recognized framed messages. It does not claim full exchange-protocol coverage. Its fixtures are synthetic, tiny, and unsuitable for capacity, latency, alpha, execution-quality, or financial-performance conclusions.
+## Data scope
 
-The execution model has no hidden liquidity, venue selection, empirically
-calibrated market impact, or calibrated queue-position/cancellation parameters.
-It timestamps an exchange acknowledgement but does not simulate venue-specific
-matching-engine acknowledgement queues. Passive repricing is represented in the
-decision vocabulary but an automatic cancel/reprice loop is not claimed. The
-risk engine is not a production risk service: it has no durable ledger, account
-aggregation, reconciliation, authentication, or regulatory workflow. The
-dashboard only reads prepared local files and does not validate data licensing.
+The canonical evidence uses two Nasdaq BX sample days and AAPL. It does not
+cover the primary Nasdaq book, multiple symbols, multiple years, corporate
+actions, or diverse volatility regimes. A 31-day gap separates training and
+evaluation samples. Raw archives are downloaded from Nasdaq but not committed
+or redistributed.
 
-The bundled fixtures are too small for a defensible out-of-sample machine
-learning score. The research runner deliberately refuses one-class and
-undersized training periods.
+The decoder length-validates every ITCH 5.0 type observed in these sessions but
+semantically decodes only messages needed for book, trade, and session state.
+Recognized administrative messages are counted and skipped.
 
-The committed CI workflow defines hosted checks. A local pass is not evidence
-that hosted CI is green; the exact hosted run must be checked after each push.
+## Execution
+
+All fills are simulated against historical displayed messages. There is no
+hidden liquidity, venue routing, auction participation, self-impact feedback,
+empirically calibrated queue cancellation probability, or matching-engine
+acknowledgement distribution. The adaptive size-sweep result is conditional on
+one day, one venue, one symbol, one side, and the configured latency/fee values.
+It must not be presented as live savings or expected profitability.
+The canonical size sweep uses zero configured fees and latency; non-zero
+latency stages and maker/taker fees are implemented and unit-tested but require
+venue/date-specific calibration before they belong in the real-data headline.
+
+## Research
+
+The real research set has 153 passive child observations from one evaluation
+day. Chronological and class gates make the reported experiment valid as a
+small exploratory test, not as a production model study. The models do not
+show predictive edge, and no alpha claim is made.
+
+## Risk and operations
+
+The risk engine is an in-process research component. It lacks durable
+multi-account ledgers, authentication, reconciliation, regulatory reporting,
+distributed failover, and production observability. Local nanosecond timings
+are machine/compiler measurements, not production SLOs.
+
+The dashboard reads prepared local artifacts only. It does not connect to a
+venue, broker, or data entitlement service.

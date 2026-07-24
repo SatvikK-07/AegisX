@@ -277,7 +277,8 @@ class MarketReplayEngine {
   ReplayResult run_file(const std::filesystem::path& input, const NasdaqItchParser& parser,
                         const ReplayConfig& config = {}) const;
   void write(const ReplayResult& result, const std::filesystem::path& out, const std::string& input,
-             std::string_view input_checksum = "") const;
+             std::string_view input_checksum = "", std::string_view data_classification = "unspecified",
+             const std::filesystem::path& provenance = {}) const;
 };
 
 enum class Strategy { Twap, Vwap, Pov, Adaptive };
@@ -397,6 +398,7 @@ struct ExecutionConfig {
   Money taker_fee_per_share{};
   double maker_fee_bps{};
   double taker_fee_bps{};
+  bool adaptive_cancel_replace_on_urgency{};
   bool force_completion_at_end{true};
   CompletionPolicy completion_policy{CompletionPolicy::ForceMarket};
   std::vector<Timestamp> adverse_selection_horizons_ns{1'000'000ULL, 10'000'000ULL, 100'000'000ULL};
@@ -404,8 +406,10 @@ struct ExecutionConfig {
 };
 struct ExecutionReport {
   Strategy strategy{};
+  ParentOrderId parent_order_id{};
   StockLocate stock_locate{};
   std::string symbol;
+  Side side{};
   Quantity filled{};
   Quantity unfilled{};
   double fill_rate{};

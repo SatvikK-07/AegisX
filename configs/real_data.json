@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kind": "real_data",
+  "venue": "Nasdaq BX",
+  "protocol": "TotalView-ITCH 5.0 / BinaryFILE",
+  "symbol": "AAPL",
+  "training_source": {
+    "session_date": "2019-07-30",
+    "url": "https://emi.nasdaq.com/ITCH/Nasdaq%20BX%20ITCH/20190730.BX_ITCH_50.gz",
+    "expected_bytes": 391242214,
+    "archive": "data/raw/20190730.BX_ITCH_50.gz",
+    "segment": "data/processed/20190730.BX_ITCH_50.AAPL.itch"
+  },
+  "evaluation_source": {
+    "session_date": "2019-08-30",
+    "url": "https://emi.nasdaq.com/ITCH/Nasdaq%20BX%20ITCH/20190830.BX_ITCH_50.gz",
+    "expected_bytes": 449303567,
+    "archive": "data/raw/20190830.BX_ITCH_50.gz",
+    "segment": "data/processed/20190830.BX_ITCH_50.AAPL.itch"
+  }
+}

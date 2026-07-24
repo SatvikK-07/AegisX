@@ -1,24 +1,40 @@
 # Demo script
 
-1. Configure and test the offline tree.
+## First run
 
-   ```bash
-   cmake -S . -B build/demo -DCMAKE_BUILD_TYPE=Debug
-   cmake --build build/demo --parallel
-   ctest --test-dir build/demo --output-on-failure
-   ```
+```bash
+cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
+cmake --build build/release --parallel
+ctest --test-dir build/release --output-on-failure
+python -m pip install ./python
+python scripts/run_real_pipeline.py
+```
 
-2. Generate replay, execution, risk, and benchmark artifacts.
+The data step downloads approximately 841 MB directly from Nasdaq. Subsequent
+runs can use:
 
-   ```bash
-   ./build/demo/aegisx replay --input data/fixtures/itch_reference_segment.itch --output runs/demo
-   ./build/demo/aegisx simulate --input data/fixtures/aegisx_itch_sample.itch --output runs/demo
-   ./build/demo/aegisx risk-demo --output runs/demo
-   ./build/demo/aegisx benchmark --input data/fixtures/itch_reference_segment.itch --output runs/demo
-   ```
+```bash
+python scripts/run_real_pipeline.py --skip-download
+```
 
-3. Open `PYTHONPATH=python streamlit run dashboard/app.py` and select `runs/demo`.
+## Show the evidence
 
-4. On a larger simulator-labelled run with both passive-fill classes, run `PYTHONPATH=python python python/scripts/run_research.py --run runs/demo`.
+```bash
+PYTHONPATH=python streamlit run dashboard/app.py
+```
 
-The final command intentionally refuses an inadequate dataset; that is expected for the tiny committed fixtures.
+The dashboard defaults to `runs/real-bx-20190830-aapl`.
+
+Walk through:
+
+1. complete official archive sizes and SHA-256 provenance;
+2. 62.7M full-feed frames scanned and zero unknown AAPL message types;
+3. deterministic replay checksums and FIFO state;
+4. July-trained/August-evaluated VWAP profile;
+5. the five completed execution size comparisons;
+6. adaptive urgency cancellation and aggressive replacement;
+7. risk rejection and reservation lifecycle;
+8. the 91/30/30 research split and negative out-of-sample model result.
+
+Synthetic fixture commands belong only in the test demonstration, not in the
+market-evidence walkthrough.

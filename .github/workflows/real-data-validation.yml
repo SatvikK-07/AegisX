@@ -1,0 +1,30 @@
+name: Real Nasdaq ITCH validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  real-session:
+    name: Two-session Nasdaq BX replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install research dependencies
+        run: python -m pip install --upgrade pip && python -m pip install ./python
+      - name: Build release engine
+        run: cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release && cmake --build build/release --parallel
+      - name: Acquire and validate two official real sessions
+        run: python scripts/run_real_pipeline.py --connections 24
+      - name: Upload provenance and derived evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegisx-real-data-evidence
+          path: |
+            runs/real-bx-20190830-aapl/**
+            data/processed/*.provenance.json
+            data/processed/*vwap-profile*
+          retention-days: 14

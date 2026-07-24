@@ -1,28 +1,46 @@
 # Portfolio and interview content
 
-## What to show
+## Defensible résumé bullets
 
-1. Run the reference fixture and compare its SHA-256 and deterministic
-   checksums.
-2. Open the execution decision, child-order, fill, and comparison artifacts in
-   the dashboard.
-3. Explain the historical/visible/shadow-state boundary and the passive
-   shared-flow regression test.
-4. Run the risk demonstration and trace approval, reservation, fill/release,
-   reject, and kill-switch records.
-5. Show the purged chronological research split and explain why the repository
-   does not claim a model score from its tiny fixtures.
+**AegisX | C++20, Python, Nasdaq ITCH, DuckDB, Streamlit**
 
-## Defensible résumé evidence
+- Built a C++20 TotalView-ITCH replay and FIFO limit-order-book engine,
+  validating **62.7M messages across two complete official Nasdaq BX
+  sessions**, deterministic checksums, sanitizers, and **40,000 randomized FIFO
+  operations**; measured **1.827M real replay events/sec** and **9.032M parser
+  messages/sec**.
 
-- C++ randomized FIFO validation: **20,000 operations per seed over two fixed
-  seeds**, plus deterministic fixture and full-state checksums.
-- Synthetic replay throughput: **6.989M events/second median** on the documented
-  Apple M3 Release setup.
-- Adaptive-vs-TWAP result: **89.3276 bps mean savings across six deterministic
-  synthetic regimes**, with 113.316 bps standard deviation.
-- Pre-trade risk: **0.125 μs p99 approval latency** and **7.760M complete
-  approval/release checks per second** over one million iterations.
+- Implemented TWAP, earlier-session-profile VWAP, POV, and queue-aware adaptive
+  execution with passive fills, latency stages, fees, adverse selection, and
+  urgency cancel/replace; adaptive simulated **25.039 bps lower cost than TWAP
+  across five fully completed 100–1,000 share AAPL size tests** on the held-later
+  real Nasdaq BX session.
 
-Every statement must retain the words “synthetic” or “deterministic” where
-shown. None is a live-market, profitability, or production-capacity claim.
+- Achieved **0.084 μs p99 approval latency at 8.882M approval/release
+  checks/sec** over one million iterations with position, gross/net exposure,
+  concentration, reservation, rate, stale-data, loss, drawdown, and kill-switch
+  controls.
+
+The second bullet must retain “simulated,” the one-session scope, and the tested
+size range.
+
+## Interview walkthrough
+
+1. Show `docs/real_data.md`: official URLs, complete archive sizes, and
+   full/derived SHA-256 checksums.
+2. Explain why July supplies the profile and August remains later in time.
+3. Trace BinaryFILE framing into strict decoding, stock-locate routing, FIFO
+   books, and deterministic state checksums.
+4. Compare the five completed execution size tests and explain the adaptive
+   urgency cancel/replace transition.
+5. Show the risk reservation and kill-switch audit lifecycle.
+6. Present the negative real-data ML result and explain why it is more credible
+   than manufacturing an impressive score from 153 observations.
+
+## Claims not to make
+
+- production exchange throughput or co-located latency;
+- live fills, realized profit, or expected 25 bps savings;
+- multi-regime robustness;
+- a useful fill-prediction model;
+- full ITCH semantic coverage or production risk-service readiness.

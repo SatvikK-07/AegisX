@@ -14,8 +14,16 @@ _REQUIRED = {
     "replay": {"input", "snapshot_every_events", "top_levels"},
     "execution": {"intervals", "max_child_quantity", "completion_policy", "latency_ns", "fees"},
     "risk": {"max_order_quantity", "max_parent_quantity", "max_open_orders", "max_position"},
-    "research": {"horizon_rows", "embargo_rows", "features", "random_seed"},
+    "research": {
+        "horizon_rows",
+        "embargo_rows",
+        "features",
+        "random_seed",
+        "minimum_rows",
+        "minimum_partition_rows",
+    },
     "dashboard": {"default_run", "read_only"},
+    "real_data": {"venue", "protocol", "symbol", "training_source", "evaluation_source"},
 }
 
 

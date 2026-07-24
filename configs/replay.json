@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "replay",
-  "input": "data/fixtures/itch_reference_segment.itch",
-  "snapshot_every_events": 1,
+  "input": "data/processed/20190830.BX_ITCH_50.AAPL.itch",
+  "snapshot_every_events": 100,
   "top_levels": 5
 }
