@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "aegisx/aegisx.h"
 
@@ -102,12 +104,102 @@ void run_benchmark(const std::filesystem::path& input, const std::filesystem::pa
             << ",\n  \"replay_events\": " << result.processed_events << "\n}\n";
 }
 
+aegisx::Event execution_event(const aegisx::Timestamp timestamp, aegisx::Payload payload) {
+  return {timestamp, std::move(payload), 1, 1};
+}
+
+std::vector<aegisx::Event> execution_scenario(const aegisx::Price bid, const aegisx::Price ask) {
+  return {
+      execution_event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      execution_event(1, aegisx::Add{1, aegisx::Side::Buy, 10, bid, "AAPL", {}}),
+      execution_event(1, aegisx::Add{3, aegisx::Side::Sell, 20, ask, "AAPL", {}}),
+      execution_event(2, aegisx::System{'O'}),
+      execution_event(5, aegisx::System{'Q'}),
+      execution_event(6, aegisx::Execute{1, 10, 1}),
+      execution_event(7, aegisx::Add{2, aegisx::Side::Buy, 10, bid, "AAPL", {}}),
+      execution_event(8, aegisx::Execute{2, 10, 2}),
+  };
+}
+
+void run_execution_benchmark(const std::filesystem::path& output) {
+  struct Scenario {
+    const char* name;
+    aegisx::Price bid;
+    aegisx::Price ask;
+  };
+  const std::vector<Scenario> scenarios{
+      {"tight_spread", 100'000, 100'200}, {"wide_spread", 99'000, 100'000}, {"volatile_spread", 98'000, 101'000}};
+  aegisx::ExecutionConfig config;
+  config.intervals = 2;
+  config.max_child_quantity = 5;
+  config.force_completion_at_end = false;
+  aegisx::ExecutionSimulator simulator;
+  std::filesystem::create_directories(output);
+  std::ofstream csv(output / "execution_benchmark.csv");
+  if (!csv) throw std::runtime_error("could not open execution benchmark output");
+  csv << "scenario,twap_average_price_ticks,adaptive_average_price_ticks,adaptive_savings_bps\n";
+  double total_savings_bps = 0.0;
+  for (const auto& scenario : scenarios) {
+    const auto events = execution_scenario(scenario.bid, scenario.ask);
+    const aegisx::ParentOrder parent{1, 1, "AAPL", aegisx::Side::Buy, 10, 2, 8};
+    const auto twap = simulator.run(events, parent, aegisx::Strategy::Twap, config);
+    const auto adaptive = simulator.run(events, parent, aegisx::Strategy::Adaptive, config);
+    if (!twap.average_price || !adaptive.average_price || twap.filled != parent.target_quantity ||
+        adaptive.filled != parent.target_quantity) {
+      throw std::runtime_error("synthetic execution benchmark did not complete both parents");
+    }
+    const double savings_bps = (*twap.average_price - *adaptive.average_price) / *twap.average_price * 10'000.0;
+    total_savings_bps += savings_bps;
+    csv << scenario.name << ',' << *twap.average_price << ',' << *adaptive.average_price << ',' << savings_bps << '\n';
+  }
+  std::ofstream metadata(output / "execution_benchmark.json");
+  metadata << "{\n  \"scenarios\": " << scenarios.size()
+           << ",\n  \"mean_adaptive_savings_bps\": " << total_savings_bps / static_cast<double>(scenarios.size())
+           << "\n}\n";
+}
+
+void run_risk_benchmark(const std::filesystem::path& output, const std::size_t iterations) {
+  if (iterations < 100) throw std::runtime_error("risk benchmark requires at least 100 iterations");
+  aegisx::RiskLimits limits;
+  limits.max_order_quantity = 1;
+  limits.max_order_notional_ticks = 1'000;
+  limits.max_open_order_exposure_ticks = 1'000;
+  limits.max_orders_per_window = std::numeric_limits<std::uint32_t>::max();
+  aegisx::RiskEngine risk(limits);
+  risk.mark(1, "AAPL", 100, 1);
+  std::vector<std::int64_t> samples;
+  samples.reserve(iterations);
+  const auto started = std::chrono::steady_clock::now();
+  for (std::size_t index = 0; index < iterations; ++index) {
+    const std::string id = "benchmark-" + std::to_string(index);
+    const auto before = std::chrono::steady_clock::now();
+    const auto decision =
+        risk.approve({id, 1, "AAPL", aegisx::Side::Buy, 1, 100, static_cast<aegisx::Timestamp>(index + 2)});
+    const auto after = std::chrono::steady_clock::now();
+    if (!decision.approved) throw std::runtime_error("risk benchmark approval failed");
+    risk.release(id);
+    samples.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(after - before).count());
+  }
+  const auto finished = std::chrono::steady_clock::now();
+  std::sort(samples.begin(), samples.end());
+  const std::size_t p99_index = (samples.size() * 99U + 99U) / 100U - 1U;
+  const auto elapsed_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(finished - started).count();
+  const double checks_per_second = static_cast<double>(iterations) * 1'000'000'000.0 / static_cast<double>(elapsed_ns);
+  std::filesystem::create_directories(output);
+  std::ofstream metadata(output / "risk_benchmark.json");
+  if (!metadata) throw std::runtime_error("could not open risk benchmark output");
+  metadata << "{\n  \"iterations\": " << iterations << ",\n  \"p99_nanoseconds\": " << samples[p99_index]
+           << ",\n  \"checks_per_second\": " << checks_per_second << "\n}\n";
+}
+
 }  // namespace
 
 int main(const int argc, char** argv) {
   try {
     if (argc < 2) {
-      throw std::runtime_error("usage: aegisx replay|simulate|risk-demo|benchmark --input FILE --output DIR");
+      throw std::runtime_error(
+          "usage: aegisx replay|simulate|risk-demo|benchmark|execution-benchmark|risk-benchmark --input FILE --output "
+          "DIR");
     }
     const std::string command = argv[1];
     const std::filesystem::path input = option(argc, argv, "--input", "data/fixtures/aegisx_itch_sample.itch");
@@ -150,6 +242,12 @@ int main(const int argc, char** argv) {
     } else if (command == "benchmark") {
       run_benchmark(input, output);
       std::cout << "AegisX wrote benchmark report\n";
+    } else if (command == "execution-benchmark") {
+      run_execution_benchmark(output);
+      std::cout << "AegisX wrote synthetic execution benchmark\n";
+    } else if (command == "risk-benchmark") {
+      run_risk_benchmark(output, size_option(argc, argv, "--iterations").value_or(100'000));
+      std::cout << "AegisX wrote risk benchmark\n";
     } else {
       throw std::runtime_error("unknown command: " + command);
     }

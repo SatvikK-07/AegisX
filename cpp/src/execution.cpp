@@ -211,12 +211,12 @@ ExecutionReport ExecutionSimulator::run(const std::vector<Event>& events, const 
       OrderType type = OrderType::Market;
       if (strategy == Strategy::Adaptive) {
         const Quantity expected = scheduled_target(event.timestamp_ns);
-        const bool behind = report.filled + total_open() < expected;
+        const bool materially_behind = report.filled + total_open() + config.max_child_quantity < expected;
         const bool urgent = parent.end_time - event.timestamp_ns <= (parent.end_time - parent.arrival_time) / 4U;
         const auto bid = book->best_bid();
         const auto ask = book->best_ask();
         const bool wide_spread = bid && ask && *ask - *bid > 1;
-        type = !behind && !urgent && wide_spread ? OrderType::Limit : OrderType::Market;
+        type = !materially_behind && !urgent && wide_spread ? OrderType::Limit : OrderType::Market;
       }
       submit_child(event.timestamp_ns, type, desired);
       activate_children(event.timestamp_ns);

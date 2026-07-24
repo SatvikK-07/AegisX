@@ -259,6 +259,28 @@ TEST_CASE("execution strategies use isolated liquidity, shadow consumption, and 
   CHECK(twap.children.front().submitted_quantity != vwap.children.front().submitted_quantity);
 }
 
+TEST_CASE("adaptive execution can choose passive children in a wide displayed market") {
+  const std::vector<Event> market{
+      event(1, aegisx::StockDirectory{"AAPL", 'Q', 'N', false, 100}),
+      event(1, Add{1, Side::Buy, 10, 99, "AAPL", {}}),
+      event(1, Add{3, Side::Sell, 20, 101, "AAPL", {}}),
+      event(2, aegisx::System{'O'}),
+      event(5, aegisx::System{'Q'}),
+      event(6, aegisx::Execute{1, 10, 1}),
+      event(7, Add{2, Side::Buy, 10, 99, "AAPL", {}}),
+      event(8, aegisx::Execute{2, 10, 2}),
+  };
+  const aegisx::ParentOrder parent{1, 1, "AAPL", Side::Buy, 10, 2, 8};
+  aegisx::ExecutionConfig config;
+  config.intervals = 2;
+  config.max_child_quantity = 5;
+  config.force_completion_at_end = false;
+  const auto adaptive = aegisx::ExecutionSimulator{}.run(market, parent, aegisx::Strategy::Adaptive, config);
+  CHECK(adaptive.filled == parent.target_quantity);
+  CHECK(adaptive.passive_ratio == 1.0);
+  CHECK(adaptive.average_price == 99.0);
+}
+
 TEST_CASE("risk reservations, marked PnL, rate limits, and kill switch are enforced") {
   aegisx::RiskLimits limits;
   limits.max_order_quantity = 10;

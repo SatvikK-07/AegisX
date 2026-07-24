@@ -11,6 +11,7 @@
 - C++ formatting check with clang-format 22.1.8: passed.
 - Dashboard and research Python bytecode compilation: passed.
 - Reference fixture replay, execution simulation, risk-demo artifact generation, and smoke benchmark: passed.
+- Release benchmark harness: passed on a 1,000,001-event deterministic synthetic stream and 100,000 risk approvals; results are documented in `benchmark_report.md`.
 
 ## Defined but not locally claimable
 

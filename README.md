@@ -34,6 +34,17 @@ PYTHONPATH=python python python/scripts/run_research.py --run runs/demo
 
 The bundled fixtures are intentionally too short to support a credible fitted model; the command correctly stops rather than manufacturing model metrics when there are not two observed passive-fill classes.
 
+## Reproducible synthetic benchmarks
+
+```bash
+python scripts/generate_benchmark_fixture.py --pairs 500000 --output /private/tmp/aegisx-million.itch
+./build/release/aegisx benchmark --input /private/tmp/aegisx-million.itch --output /private/tmp/throughput
+./build/release/aegisx execution-benchmark --output /private/tmp/execution
+./build/release/aegisx risk-benchmark --iterations 100000 --output /private/tmp/risk
+```
+
+On an Apple M3 with GCC 15.2 Release, the three-run median replay result was **6.69M synthetic events/sec**; the pre-trade approval benchmark recorded **26 μs p99** and **74.9K checks/sec** over 100,000 checks. Adaptive execution saved **139.0 bps** versus TWAP across three deterministic synthetic book scenarios. These are local synthetic benchmarks, not external-feed, live-trading, or production-latency claims.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)
